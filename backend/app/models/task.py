@@ -39,6 +39,9 @@ class ScheduledTask(Base, TimestampMixin):
     total_runs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(64))
+    # 可选 Redis 队列执行；默认仍由 APScheduler 直接调用保持兼容。
+    queue_name: Mapped[str | None] = mapped_column(String(96))
+    job_key: Mapped[str | None] = mapped_column(String(190), unique=True, index=True)
 
 
 class TaskRecord(Base):

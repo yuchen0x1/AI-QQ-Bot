@@ -62,6 +62,10 @@ class AccountConnection(Base, TimestampMixin):
     connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_disconnect_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 跨进程运行租约：过期后允许其它 worker 接管，避免同一账号重复连接。
+    lease_owner: Mapped[str | None] = mapped_column(String(96), index=True)
+    lease_id: Mapped[str | None] = mapped_column(String(96), unique=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     reconnect_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sent_messages: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     received_messages: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)

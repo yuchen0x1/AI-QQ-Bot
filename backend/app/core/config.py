@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from functools import lru_cache
 from pathlib import Path
 
@@ -67,6 +68,11 @@ class Settings(BaseSettings):
     # ---------- Redis ----------
     redis_url: str = "redis://localhost:6379/0"
     redis_enabled: bool = False
+    redis_queue_enabled: bool = False
+    redis_queue_name: str = "qbot:tasks"
+    instance_id: str = ""
+    account_lease_seconds: int = 45
+    account_lease_renew_seconds: int = 15
 
     # ---------- 调度 / 通知 ----------
     scheduler_enabled: bool = True
@@ -87,6 +93,21 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.env.lower() in {"production", "prod"}
+
+    @property
+    def runtime_instance_id(self) -> str:
+        return self.instance_id.strip() or f"{socket.gethostname()}:{os.getpid()}"
+
+    def validate_security(self) -> None:
+        """生产环境拒绝可预测的默认凭据，开发环境保持旧默认值兼容。"""
+        if not self.is_production:
+            return
+        if len(self.secret_key) < 32 or self.secret_key.startswith("change-me"):
+            raise ValueError("生产环境 SECRET_KEY 必须至少 32 个字符且不能使用默认值")
+        if self.admin_password in {"admin123", "password", "changeme"} or len(self.admin_password) < 12:
+            raise ValueError("生产环境 ADMIN_PASSWORD 必须至少 12 个字符且不能使用默认值")
+        if "*" in self.cors_origins:
+            raise ValueError("生产环境不允许使用通配 CORS_ORIGINS")
 
     def napcat_instances(self) -> list[dict[str, str]]:
         """Read fixed NapCat slots without exposing credentials in API responses."""

@@ -48,8 +48,8 @@ class AccountUpdate(BaseModel):
     enabled: bool | None = None
     auto_start: bool | None = None
     auto_reconnect: bool | None = None
-    reconnect_base_seconds: int | None = None
-    reconnect_max_seconds: int | None = None
+    reconnect_base_seconds: int | None = Field(default=None, ge=1, le=600)
+    reconnect_max_seconds: int | None = Field(default=None, ge=5, le=3600)
     remark: str | None = None
 
 
@@ -239,6 +239,13 @@ class SendMessageRequest(BaseModel):
     qq_group: int | None = None
     user_id: int | None = None
     content: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("qq_group", "user_id")
+    @classmethod
+    def _positive_target(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("目标 ID 必须为正整数")
+        return value
 
 
 class CommandOut(ORMModel):

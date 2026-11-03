@@ -29,8 +29,11 @@ logger = logging.getLogger("qbot.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("启动 %s（env=%s）", settings.app_name, settings.env)
-    if settings.is_production and settings.secret_key.startswith("change-me"):
-        logger.error("生产环境必须修改 SECRET_KEY！当前使用默认值，存在严重安全风险")
+    try:
+        settings.validate_security()
+    except ValueError as exc:
+        logger.error("安全配置校验失败：%s", exc)
+        raise
     await init_database()
     async with SessionLocal() as db:
         stats = await plugin_manager.load_all(db)

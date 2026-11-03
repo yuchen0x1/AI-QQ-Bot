@@ -24,6 +24,7 @@ class GithubRepository(Base, TimestampMixin):
     __tablename__ = "github_repositories"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(24), default="github", nullable=False, index=True)
     owner: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(190), nullable=False)
     full_name: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)

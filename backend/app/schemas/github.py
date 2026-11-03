@@ -11,6 +11,7 @@ from app.schemas.common import ORMModel
 
 
 class RepoCreate(BaseModel):
+    provider: str = "github"
     url: str | None = None
     owner: str | None = None
     name: str | None = None
@@ -37,6 +38,7 @@ class RepoUpdate(BaseModel):
 
 class RepoOut(ORMModel):
     id: int
+    provider: str = "github"
     owner: str
     name: str
     full_name: str
