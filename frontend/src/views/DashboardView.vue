@@ -1,5 +1,5 @@
 <template>
-  <div class="page-heading"><div><div class="eyebrow">OVERVIEW</div><h1>仪表盘</h1><p>实时掌握机器人平台运行概况</p></div><el-button :icon="Refresh" @click="load">刷新数据</el-button></div>
+  <div class="page-heading"><div><div class="eyebrow">OVERVIEW <span class="realtime-badge"><i :class="`socket-led ${realtime.state.value}`"></i>{{ realtime.state.value === 'open' ? 'LIVE' : realtime.state.value.toUpperCase() }}</span></div><h1>仪表盘</h1><p>实时掌握机器人平台运行概况 · {{ realtime.lastMessage.value?.time ? formatTime(realtime.lastMessage.value.time as string) : '等待状态同步' }}</p></div><div class="heading-actions"><el-button v-if="realtime.state.value !== 'open'" text type="primary" @click="realtime.reconnect">重新连接</el-button><el-button :icon="Refresh" @click="load">刷新数据</el-button></div></div>
   <div v-loading="loading">
     <div class="metric-grid">
       <div class="metric-card" v-for="m in metrics" :key="m.label"><div class="metric-top"><span>{{ m.label }}</span><div class="metric-icon" :class="m.tone"><el-icon><component :is="m.icon" /></el-icon></div></div><div class="metric-value">{{ m.value }}</div><div class="metric-foot"><span :class="m.footClass">{{ m.foot }}</span><span>{{ m.hint }}</span></div></div>
@@ -12,7 +12,7 @@
       </section><section class="surface"><div class="surface-head"><div><h3>近期系统事件</h3><p>最新日志与运行通知</p></div><el-button link type="primary" @click="$router.push('/logs')">日志中心 <el-icon><ArrowRight /></el-icon></el-button></div>
         <div v-if="!data?.recent_events?.length" class="empty-inline"><el-icon><Bell /></el-icon><span>暂无近期事件</span></div><div v-else class="event-list"><div class="event-row" v-for="event in data.recent_events.slice(0,6)" :key="event.id"><div class="event-mark" :class="event.level?.toLowerCase()"></div><div class="event-content"><b>{{ event.message }}</b><small>{{ event.category }} · {{ formatTime(event.created_at) }}</small></div></div></div>
       </section></div>
-    <div class="infra-strip"><span class="infra-label">服务健康</span><span class="infra-item"><i :class="system?.db_ok ? 'ok' : 'bad'"></i>PostgreSQL {{ system?.db_ok ? '正常' : '异常' }}</span><span class="infra-item"><i :class="!system?.redis_enabled || system?.redis_ok ? 'ok' : 'bad'"></i>Redis {{ !system?.redis_enabled ? '未启用' : system?.redis_ok ? '正常' : '异常' }}</span><span class="infra-item"><i :class="system?.scheduler_running ? 'ok' : 'warn'"></i>任务调度 {{ system?.scheduler_running ? '运行中' : '已暂停' }}</span><span class="infra-spacer"></span><span>推送成功率 <b>{{ data?.push_success_rate ?? 100 }}%</b></span></div>
+    <div class="infra-strip"><span class="infra-label">服务健康</span><span class="infra-item"><i :class="system?.db_ok ? 'ok' : 'bad'"></i>PostgreSQL {{ system?.db_ok ? '正常' : '异常' }}</span><span v-if="realtime.lastMessage.value" class="infra-item"><i class="ok"></i>实时状态 {{ realtime.lastMessage.value.online ?? 0 }}/{{ realtime.lastMessage.value.total_runtime ?? 0 }} 在线</span><span class="infra-item"><i :class="!system?.redis_enabled || system?.redis_ok ? 'ok' : 'bad'"></i>Redis {{ !system?.redis_enabled ? '未启用' : system?.redis_ok ? '正常' : '异常' }}</span><span class="infra-item"><i :class="system?.scheduler_running ? 'ok' : 'warn'"></i>任务调度 {{ system?.scheduler_running ? '运行中' : '已暂停' }}</span><span class="infra-spacer"></span><span>推送成功率 <b>{{ data?.push_success_rate ?? 100 }}%</b></span></div>
   </div>
 </template>
 <script setup lang="ts">
@@ -23,9 +23,10 @@ import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { ArrowRight, Avatar, Bell, Refresh } from '@element-plus/icons-vue'
-import { api } from '../api'
+import { api, useRealtimeSocket } from '../api'
 use([CanvasRenderer, LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent])
 const loading = ref(false), data = ref<any>(), system = ref<any>()
+const realtime = useRealtimeSocket<any>('/ws/status')
 const metrics = computed(() => [
   { label: 'QQ 账号', value: data.value?.accounts_total ?? 0, foot: `${data.value?.accounts_online ?? 0} 个在线`, hint: `${data.value?.accounts_offline ?? 0} 个离线`, icon: 'Avatar', tone: 'blue', footClass: 'accent' },
   { label: '今日消息', value: data.value?.messages_today ?? 0, foot: `↑ ${data.value?.messages_sent_today ?? 0} 条发送`, hint: '收发合计', icon: 'ChatLineSquare', tone: 'cyan', footClass: 'green-text' },

@@ -1,14 +1,17 @@
 <template>
   <div class="accounts-page">
+    <div class="account-live-bar"><span class="eyebrow">FLEET STATUS</span><span class="live-count"><i :class="`socket-led ${realtime.state.value}`"></i>{{ realtime.state.value === 'open' ? '实时同步中' : '等待连接' }}</span><span v-if="realtime.lastMessage.value">在线 {{ realtime.lastMessage.value.online ?? 0 }} / {{ realtime.lastMessage.value.total_runtime ?? 0 }}</span><span v-if="realtime.lastMessage.value?.messages_today != null">今日消息 {{ realtime.lastMessage.value.messages_today }}</span></div>
     <ResourceView ref="resourceRef" :config="config" />
     <QrLoginDialog ref="qrRef" @completed="reload" />
   </div>
 </template>
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useRealtimeSocket } from '../api'
 import ResourceView from '../components/ResourceView.vue'
 import QrLoginDialog from '../components/QrLoginDialog.vue'
 const resourceRef = ref(), qrRef = ref()
+const realtime = useRealtimeSocket<any>('/ws/status')
 const config = {
   kicker: 'QQ BOT FLEET', title: 'QQ 账号管理', description: '扫码登录优先；已有协议端可使用高级 OneBot 接入。账号显示异常时，请先确认 NapCat / OneBot 协议端已启动且地址填写正确', endpoint: '/accounts', paged: false, keyword: null, itemName: '账号', nameKey: 'name', actionWidth: 230,
   columns: [{ key: 'name', label: '账号名称', width: 140 }, { key: 'qq_number', label: 'QQ 号码', width: 110 }, { key: 'protocol', label: '协议', width: 100, options: [{ value: 'onebot11', label: 'OneBot v11' }, { value: 'mock', label: '模拟适配器' }] }, { key: 'runtime_state', label: '运行状态', type: 'status', width: 95, options: [{ value: 'online', label: '在线' }, { value: 'stopped', label: '离线' }, { value: 'starting', label: '启动中' }, { value: 'error', label: '异常' }, { value: 'stopping', label: '停止中' }] }, { key: 'connection.status', label: '连接状态', type: 'status', width: 125, options: [{ value: 'online', label: '已连接' }, { value: 'error', label: '协议端未连接' }, { value: 'offline', label: '未连接' }, { value: 'connecting', label: '连接中' }] }, { key: 'group_count', label: '管理群数', width: 90 }, { key: 'auto_reconnect', label: '自动重连', type: 'bool', width: 90 }],
@@ -31,3 +34,4 @@ const config = {
 }
 function reload() { resourceRef.value?.load() }
 </script>
+<style scoped>.account-live-bar{display:flex;align-items:center;gap:15px;min-height:34px;margin:-8px 0 12px;padding:7px 12px;border:1px solid #273141;border-radius:8px;background:#111823;color:#8d9ab0;font-size:10px}.account-live-bar .eyebrow{margin:0;color:#9481ff;font-size:9px}.live-count{display:inline-flex;align-items:center;gap:6px;color:#9bd9c4}.account-live-bar .socket-led{width:6px;height:6px;border-radius:50%}@media(max-width:600px){.account-live-bar{gap:9px;flex-wrap:wrap}}</style>
