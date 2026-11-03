@@ -14,9 +14,9 @@
 - GitHub 仓库 CRUD、Release/Tag 轮询、Webhook HMAC 验签、事件/版本/推送去重、AI 更新摘要、失败重试及推送历史。
 - APScheduler 持久化任务和执行记录；插件目录扫描、按账号/群绑定。
 - Vue 3 + TypeScript + Element Plus 管理控制台：仪表盘、账号、群聊、申请审核、消息、AI、仓库、推送规则/记录、任务、插件、日志、系统监控、系统设置。
-- Docker Compose 服务：frontend、backend、scheduler、postgres、redis、nginx；`worker` 扩展入口可通过 `--profile workers` 显式启动。
+- Docker Compose 服务：frontend、backend、scheduler、postgres、redis、nginx；`worker` 扩展入口可通过 `--profile workers` 显式启动，并在队列开关开启且 Redis 可用时消费任务。
 
-目前 WebSocket 使用现有单进程运行时管理；若要水平扩展 backend，应先将机器人连接管理迁移到独立的连接服务并增加分布式租约/锁，避免同一账号多实例重复连接。`worker` 是后台扩展进程入口，目前为预览/扩展骨架，默认通过 Compose profile 关闭；启用它不会创建一个 Redis 作业消费者。APScheduler 定时任务由独立 `scheduler` 服务执行，任务处理直接调用共享业务服务。
+目前 WebSocket 使用现有单进程运行时管理；若要水平扩展 backend，应先将机器人连接管理迁移到独立的连接服务并增加分布式租约/锁，避免同一账号多实例重复连接。Worker 已具备 Redis 队列消费者，但默认通过 Compose profile 关闭，只有启用 `workers` profile、设置 `REDIS_ENABLED=true` 与 `REDIS_QUEUE_ENABLED=true` 并确保外部 Redis 可用时才会运行。APScheduler 定时任务默认由独立 `scheduler` 服务直接执行共享业务服务；启用 Redis 队列后，scheduler 将任务入队，由 worker 消费执行。
 
 ## Linux Docker Compose 部署
 
@@ -38,7 +38,7 @@
    docker compose logs -f backend scheduler
    ```
 
-   页面默认 `http://127.0.0.1:8080`；本地访问受限时通过 SSH 隧道或自行设置 TLS 代理。默认管理员账号为 `admin`，默认密码为 `admin123`；也可通过 `.env` 中的 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 覆盖，首次登录后请立即修改密码。
+   页面默认 `http://127.0.0.1:8080`；本地访问受限时通过 SSH 隧道或自行设置 TLS 代理。初始管理员账号/密码取自 `.env` 中的 `ADMIN_USERNAME` / `ADMIN_PASSWORD`，生产环境必须使用至少 12 位随机密码（不要使用 `admin123`），首次登录后请立即修改密码。
 4. 运行数据库迁移（新库首次启动应用会创建表；后续模型变更需用 Alembic）：
 
    ```bash
@@ -137,8 +137,8 @@ backup.sh / restore.sh
 
 ## 当前限制和后续工作
 
-- WebSocket 仪表盘页面当前手动刷新；后端日志 WebSocket 可供实时日志集成，尚无前端实时订阅通道。
-- Docker Compose 配置了独立 worker 扩展入口；当前业务任务主要由 scheduler 直接执行，尚未启用 Redis 队列。
+- 前端已通过 `useRealtimeSocket` 连接状态 WebSocket；当前页面连接尚未单例化，部分仪表盘数据仍依赖页面刷新，跨实例实时事件尚未实现。
+- Docker Compose 配置了独立 worker 扩展入口；默认由 scheduler 直接执行任务，启用 `REDIS_QUEUE_ENABLED=true` 后可将任务入队，由 workers profile 中的 Worker 消费执行；该部署模式仍需目标环境验收。
 - 默认数据表初始化通过 SQLAlchemy `create_all`，Alembic 初始版本已提供；从已有数据库升级需先核对 schema 并安排备份。
 - QQ 协议覆盖范围取决于 OneBot v11 实现的实际 API 能力；未支持操作会返回明确错误。
 - 多实例机器人运行、自动化处罚策略的生产灰度、公网 HTTPS/监控告警、恢复演练、Docker/Linux 集成验收仍需在目标服务器完成。
