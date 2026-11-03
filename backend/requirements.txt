@@ -15,4 +15,4 @@ python-multipart==0.0.20
 email-validator==2.2.0
 cryptography==44.0.0
 psutil==6.1.1
-websockets==13.1
+websockets==17.4

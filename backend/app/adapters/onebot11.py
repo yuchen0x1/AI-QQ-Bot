@@ -127,13 +127,24 @@ class OneBot11Adapter(QQAdapter):
         if not self.ws_url:
             raise AdapterError("ws_client 模式必须配置 WebSocket 地址")
         try:
+            import inspect
             import websockets
         except ImportError as exc:  # pragma: no cover
             raise AdapterError("缺少 websockets 依赖") from exc
         try:
+            # websockets >= 13 将 extra_headers 更名为 additional_headers，
+            # 旧参数名在新版会被透传到 asyncio.create_connection 导致崩溃。
+            # 这里按实际签名自适应，避免版本波动再次踩坑。
+            conn_params = inspect.signature(websockets.connect).parameters
+            header_key = (
+                "additional_headers" if "additional_headers" in conn_params else "extra_headers"
+            )
+            header_val = (
+                {"Authorization": f"Bearer {self.access_token}"} if self.access_token else {}
+            )
             self._ws = await websockets.connect(
                 self.ws_url,
-                extra_headers={"Authorization": f"Bearer {self.access_token}"} if self.access_token else None,
+                **{header_key: header_val},
                 ping_interval=30,
                 ping_timeout=30,
                 max_size=8 * 1024 * 1024,
