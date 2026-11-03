@@ -1,0 +1,17 @@
+{
+  "id": "keyword_reply",
+  "name": "关键词自动回复",
+  "version": "1.0.0",
+  "author": "QBot",
+  "description": "按配置的关键词自动回复，演示插件消息钩子与配置项",
+  "permissions": ["message:reply"],
+  "enabled_by_default": false,
+  "builtin": true,
+  "config": {
+    "rules": [
+      {"keyword": "使用帮助", "reply": "发送 /help 查看全部命令；发送 /ai 你的问题 可以直接问 AI。"},
+      {"keyword": "签到", "reply": "本群暂未开启签到功能，可联系管理员。"}
+    ]
+  },
+  "commands": []
+}

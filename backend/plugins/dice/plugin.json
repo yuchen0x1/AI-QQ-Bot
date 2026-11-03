@@ -1,0 +1,15 @@
+{
+  "id": "dice",
+  "name": "骰子与抽签",
+  "version": "1.0.0",
+  "author": "QBot",
+  "description": "群内掷骰子、随机抽签，演示插件命令注册与参数解析",
+  "permissions": ["message:reply"],
+  "enabled_by_default": true,
+  "builtin": true,
+  "config": {"max_dice": 10, "max_faces": 100},
+  "commands": [
+    {"name": "roll", "description": "掷骰子，例如 /roll 2d6"},
+    {"name": "draw", "description": "随机抽签"}
+  ]
+}

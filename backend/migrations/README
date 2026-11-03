@@ -1,0 +1,12 @@
+Migration setup
+===============
+
+The initial revision creates the SQLAlchemy metadata for a fresh database. For production deployments, run migrations with the same DATABASE_URL used by the application:
+
+  alembic upgrade head
+
+When changing model definitions, generate and review a new migration before applying it:
+
+  alembic revision --autogenerate -m "describe change"
+
+The application startup still creates missing tables as a convenience for development and new installations. It does not alter existing tables; use Alembic for schema changes.

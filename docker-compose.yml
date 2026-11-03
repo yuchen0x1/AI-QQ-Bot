@@ -1,0 +1,179 @@
+name: qbot-ai
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-qbot}
+      POSTGRES_USER: ${POSTGRES_USER:-qbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      TZ: Asia/Shanghai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qbot} -d ${POSTGRES_DB:-qbot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [qbot_internal]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '$$REDIS_PASSWORD' ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    networks: [qbot_internal]
+
+  napcat-1:
+    image: mlikiowa/napcat-docker:v4.18.28
+    restart: unless-stopped
+    profiles: ["napcat"]
+    environment:
+      MODE: ws
+      WEBUI_TOKEN: ${NAPCAT_WEBUI_TOKEN:?Set NAPCAT_WEBUI_TOKEN in .env}
+      TZ: Asia/Shanghai
+    # Keep WebUI private. Backend reaches this service over qbot_internal.
+    expose: ["3000", "3001", "6099"]
+    volumes:
+      - napcat_1_qq:/app/.config/QQ
+      - napcat_1_config:/app/napcat/config
+      - napcat_1_plugins:/app/napcat/plugins
+    networks: [qbot_internal]
+
+  backend:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qbot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qbot}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      REDIS_ENABLED: "true"
+      SCHEDULER_ENABLED: "false"
+      DATA_DIR: /data
+      BACKUP_DIR: /backups
+      PLUGIN_DIR: /app/plugins
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes:
+      - app_data:/data
+      - app_backups:/backups
+      - ./backend/plugins:/app/plugins:ro
+    expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/system/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [qbot_internal]
+
+  worker:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    restart: unless-stopped
+    profiles: ["workers"]
+    env_file: .env
+    command: ["python", "-m", "app.worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qbot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qbot}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      REDIS_ENABLED: "true"
+      SCHEDULER_ENABLED: "false"
+      DATA_DIR: /data
+      BACKUP_DIR: /backups
+      PLUGIN_DIR: /app/plugins
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      backend: { condition: service_healthy }
+    volumes:
+      - app_data:/data
+      - app_backups:/backups
+      - ./backend/plugins:/app/plugins:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os; os.kill(1, 0)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [qbot_internal]
+
+  scheduler:
+    build: { context: ./backend, dockerfile: Dockerfile }
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "-m", "app.scheduler_runner"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qbot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qbot}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      REDIS_ENABLED: "true"
+      SCHEDULER_ENABLED: "true"
+      DATA_DIR: /data
+      BACKUP_DIR: /backups
+      PLUGIN_DIR: /app/plugins
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      backend: { condition: service_healthy }
+    volumes:
+      - app_data:/data
+      - app_backups:/backups
+      - ./backend/plugins:/app/plugins:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os; os.kill(1, 0)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [qbot_internal]
+
+  frontend:
+    build: { context: ./frontend, dockerfile: Dockerfile }
+    restart: unless-stopped
+    depends_on:
+      backend: { condition: service_healthy }
+    expose: ["80"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    networks: [qbot_internal]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      frontend: { condition: service_healthy }
+      backend: { condition: service_healthy }
+    ports:
+      - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [qbot_internal]
+
+volumes:
+  postgres_data:
+  redis_data:
+  app_data:
+  app_backups:
+  napcat_1_qq:
+  napcat_1_config:
+  napcat_1_plugins:
+
+networks:
+  qbot_internal:
+    driver: bridge

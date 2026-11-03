@@ -1,0 +1,20 @@
+<template>
+  <div class="page-heading"><div><div class="eyebrow">OBSERVABILITY</div><h1>系统日志</h1><p>检索平台各模块日志，敏感字段在服务端脱敏</p></div><el-button text :icon="Refresh" @click="load">刷新</el-button></div>
+  <section class="surface resource-surface"><div class="resource-toolbar"><div class="filter-row"><el-input v-model="filters.keyword" clearable placeholder="搜索日志关键词" :prefix-icon="Search" @keyup.enter="load(1)"/><el-select v-model="filters.category" clearable placeholder="日志分类" @change="load(1)"><el-option v-for="c in categories" :key="c.value" :label="c.label" :value="c.value"/></el-select><el-select v-model="filters.level" clearable placeholder="级别" @change="load(1)"><el-option label="INFO" value="INFO"/><el-option label="WARNING" value="WARNING"/><el-option label="ERROR" value="ERROR"/></el-select><el-button :icon="Search" @click="load(1)">筛选</el-button></div></div>
+  <el-table v-loading="loading" :data="rows" stripe><el-table-column prop="created_at" label="时间" width="165"><template #default="s">{{formatDate(s.row.created_at)}}</template></el-table-column><el-table-column prop="level" label="级别" width="90"><template #default="s"><el-tag :type="s.row.level==='ERROR'?'danger':s.row.level==='WARNING'?'warning':'info'" effect="dark" size="small">{{s.row.level}}</el-tag></template></el-table-column><el-table-column prop="category" label="分类" width="130"><template #default="s">{{categoryLabel(s.row.category)}}</template></el-table-column><el-table-column prop="account_id" label="账号" width="80"><template #default="s">{{s.row.account_id||'—'}}</template></el-table-column><el-table-column prop="message" label="内容" min-width="350" show-overflow-tooltip/><el-table-column label="上下文" width="90"><template #default="s"><el-button v-if="s.row.context" link type="primary" @click="showContext(s.row.context)">查看</el-button><span v-else>—</span></template></el-table-column></el-table>
+  <div class="pagination-wrap"><span>共 {{total}} 条</span><el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[20,50,100]" layout="sizes,prev,pager,next" @current-change="load" @size-change="load(1)"/></div></section>
+  <el-dialog v-model="contextDialog" title="日志上下文" width="min(600px,calc(100vw - 28px))"><pre class="context-view">{{contextValue}}</pre></el-dialog>
+</template>
+<script setup lang="ts">
+import { onMounted, reactive, ref } from 'vue'
+import { ElMessageBox } from 'element-plus'
+import { Refresh, Search } from '@element-plus/icons-vue'
+import { api } from '../api'
+const rows=ref<any[]>([]),categories=ref<any[]>([]),loading=ref(false),page=ref(1),pageSize=ref(50),total=ref(0),contextDialog=ref(false),contextValue=ref(''),filters=reactive({keyword:'',category:'',level:''})
+async function load(p?:number){if(p)page.value=p;loading.value=true;try{const {data}=await api.get('/logs',{params:{page:page.value,page_size:pageSize.value,...Object.fromEntries(Object.entries(filters).filter(([,v])=>v))}});rows.value=data.items||[];total.value=data.total||0}finally{loading.value=false}}
+function categoryLabel(v:string){return categories.value.find(c=>c.value===v)?.label||v}
+function formatDate(v:string){return v?new Date(v).toLocaleString('zh-CN'):'—'}
+async function showContext(value:any){contextValue.value=JSON.stringify(value,null,2);contextDialog.value=true}
+onMounted(async()=>{try{const {data}=await api.get('/logs/categories');categories.value=data}catch{}await load()})
+</script>
+<style scoped>.resource-surface{padding:0;overflow:hidden}.resource-toolbar{padding:14px 16px;border-bottom:1px solid #273141}.filter-row{display:flex;gap:8px;flex-wrap:wrap}.filter-row .el-input{width:250px}.filter-row .el-select{width:150px}.pagination-wrap{display:flex;align-items:center;justify-content:space-between;padding:14px 17px;color:#8390a4;font-size:11px}.context-view{max-height:60vh;overflow:auto;background:#0e1420;color:#d2d9e5;padding:14px;border-radius:8px;font-size:11px}@media(max-width:650px){.filter-row .el-input{width:100%}.filter-row .el-select{width:calc(50% - 5px)}.pagination-wrap{flex-wrap:wrap;gap:10px}}</style>

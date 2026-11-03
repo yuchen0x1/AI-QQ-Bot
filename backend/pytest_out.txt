@@ -1,0 +1,44 @@
+...........................F......                                       [100%]
+================================== FAILURES ===================================
+_________________________ test_failed_push_then_retry _________________________
+
+client = <httpx.AsyncClient object at 0x000001DCF07BC980>
+admin_headers = {'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiIsImV4cCI6MTc5MzY4NTUyNiwiaWF0IjoxNzkzNjQyMzI2LCJyb2xlIjoic3VwZXJfYWRtaW4ifQ.5OzO8arhRZiDLucO1mBoYDEF_RqTyu1IQxQj7hzIwJg'}
+mock_account = {'id': 1, 'account_id': '87a0a789523d', 'name': '测试模拟账号', 'qq_number': 100001, ...}
+
+    async def test_failed_push_then_retry(client: httpx.AsyncClient, admin_headers: dict, mock_account: dict):
+        repo = await _add_repo(client, admin_headers)
+        await client.put(f"/api/github/repos/{repo['id']}", headers=admin_headers, json={"webhook_secret": ""})
+        created = await client.post(
+            "/api/accounts",
+            headers=admin_headers,
+            json={"name": "离线推送账号", "protocol": "mock", "connection_mode": "http", "qq_number": 300003},
+        )
+        offline_account = created.json()
+        rule = await client.post(
+            "/api/github/push-rules",
+            headers=admin_headers,
+            json={
+                "repository_id": repo["id"],
+                "account_id": offline_account["id"],
+                "qq_group": 900002,
+                "ai_summary": False,
+            },
+        )
+        assert rule.status_code == 201
+    
+        body = json.dumps(
+            {"action": "published", "release": _release("v4.0.0"), "repository": {"full_name": "octocat/hello"}}
+        ).encode()
+        resp = await client.post(
+            f"/api/webhook/github/{repo['id']}",
+            content=body,
+            headers={"x-github-event": "release", "x-github-delivery": "delivery-offline", "content-type": "application/json"},
+        )
+        assert resp.status_code == 200
+>       assert resp.json()["pushed"] == 0
+E       assert 1 == 0
+
+tests\test_github.py:247: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_github.py::test_failed_push_then_retry - assert 1 == 0
