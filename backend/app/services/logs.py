@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.events import publish_event
 from app.core.logging import hub, mask_text
 from app.models import AuditLog, SystemLog
 
@@ -35,16 +36,17 @@ async def write_log(
     if commit:
         await db.commit()
         await db.refresh(record)
-    hub.publish(
-        {
-            "id": record.id,
-            "time": record.created_at.isoformat() if record.created_at else None,
-            "level": record.level,
-            "category": record.category,
-            "account_id": record.account_id,
-            "message": safe_message,
-        }
-    )
+    item = {
+        "id": record.id,
+        "time": record.created_at.isoformat() if record.created_at else None,
+        "level": record.level,
+        "category": record.category,
+        "account_id": record.account_id,
+        "message": safe_message,
+    }
+    # 旧日志 Hub 保留，统一事件总线同时提供跨业务 WS 事件格式。
+    hub.publish(item)
+    publish_event("log.created", item, event_id=str(record.id) if record.id else None)
     return record
 
 

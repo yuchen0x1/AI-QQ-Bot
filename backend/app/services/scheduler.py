@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import Account, GithubRepository, ScheduledTask, TaskRecord
 from app.services.logs import write_log
+from app.services.task_queue import redis_task_queue
 
 logger = logging.getLogger("qbot.scheduler")
 
@@ -293,6 +294,13 @@ class SchedulerService:
                     logger.exception("仓库轮询失败: %s", exc)
 
     async def _execute_job(self, task_id: int) -> None:
+        if redis_task_queue.enabled:
+            try:
+                await redis_task_queue.enqueue(task_id, trigger="schedule")
+                return
+            except Exception as exc:  # noqa: BLE001
+                # Redis is optional: a broker outage must not drop scheduled work.
+                logger.warning("Redis 任务队列不可用，回退本地执行：%s", exc)
         await self.execute_task(task_id, trigger="schedule")
 
     async def execute_task(self, task_id: int, *, trigger: str = "manual") -> TaskRecord:

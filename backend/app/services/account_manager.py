@@ -6,8 +6,9 @@ import asyncio
 import contextlib
 import logging
 import random
+import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -16,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.base import AdapterError, QQAdapter, UnsupportedAction
 from app.adapters.mock import MockAdapter
 from app.adapters.onebot11 import OneBot11Adapter
+from app.core.config import settings
+from app.core.events import publish_event
 from app.core.security import decrypt_secret
 from app.db.session import SessionLocal
 from app.models import Account, AccountConnection, Group, GroupMember, GroupSettings
@@ -71,6 +74,8 @@ class RuntimeState:
     messages_sent: int = 0
     messages_received: int = 0
     meta: dict[str, Any] = field(default_factory=dict)
+    lease_id: str | None = None
+    lease_renew_task: asyncio.Task | None = None
 
     @property
     def online_seconds(self) -> int:
@@ -126,12 +131,16 @@ class AccountManager:
                     raise ValueError("账号不存在")
                 if not account.enabled:
                     raise ValueError("账号已被禁用，请先启用")
+                lease_id = uuid.uuid4().hex
+                if not await self._acquire_lease(db, account.id, lease_id):
+                    raise ValueError("账号已被其它运行实例占用，请稍后重试")
                 state = RuntimeState(
                     account_db_id=account.id,
                     account_uid=account.account_id,
                     name=account.name,
                     adapter=build_adapter(account),
                     state="starting",
+                    lease_id=lease_id,
                 )
                 if reset_attempts:
                     state.attempts = 0
@@ -145,6 +154,8 @@ class AccountManager:
                     account_id=account.id,
                 )
             state.task = asyncio.create_task(self._run_loop(account_db_id), name=f"account-{account_db_id}")
+            state.lease_renew_task = asyncio.create_task(self._renew_lease_loop(account_db_id), name=f"lease-{account_db_id}")
+            publish_event("account.state", {"account_id": account_db_id, "state": state.state})
             return state
 
     async def stop(self, account_db_id: int) -> RuntimeState | None:
@@ -153,6 +164,10 @@ class AccountManager:
             return None
         state.stop_requested = True
         state.state = "stopping"
+        if state.lease_renew_task and not state.lease_renew_task.done():
+            state.lease_renew_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await state.lease_renew_task
         if state.adapter:
             with contextlib.suppress(Exception):
                 await state.adapter.disconnect()
@@ -164,7 +179,9 @@ class AccountManager:
         state.started_at = None
         async with SessionLocal() as db:
             await self._set_connection(db, account_db_id, status="offline", error="手动停止")
+            await self._release_lease(db, account_db_id, state.lease_id)
             await write_log(db, level="INFO", category="qq", message=f"账号 {state.name} 已停止", account_id=account_db_id)
+        publish_event("account.state", {"account_id": account_db_id, "state": state.state})
         return state
 
     async def restart(self, account_db_id: int) -> RuntimeState:
@@ -200,6 +217,9 @@ class AccountManager:
                 account = await db.get(Account, account_db_id)
                 if not account or not account.enabled:
                     state.state = "stopped"
+                    async with SessionLocal() as release_db:
+                        await self._release_lease(release_db, account_db_id, state.lease_id)
+                    publish_event("account.state", {"account_id": account_db_id, "state": "stopped"})
                     return
             try:
                 state.state = "starting"
@@ -235,6 +255,7 @@ class AccountManager:
                     )
                 state.state = "online"
                 state.started_at = connected_at
+                publish_event("account.state", {"account_id": account_db_id, "state": "online"})
                 with contextlib.suppress(Exception):
                     await self.sync_groups(account_db_id)
 
@@ -271,6 +292,7 @@ class AccountManager:
                 state.last_error = friendly
                 state.state = "error"
                 state.started_at = None
+                publish_event("account.state", {"account_id": account_db_id, "state": "error", "error": friendly[:500]})
                 async with SessionLocal() as db:
                     await self._set_connection(
                         db,
@@ -299,6 +321,9 @@ class AccountManager:
                     cap = account.reconnect_max_seconds if account else 300
                 if not auto_reconnect or state.stop_requested:
                     state.state = "error" if not state.stop_requested else "stopped"
+                    async with SessionLocal() as release_db:
+                        await self._release_lease(release_db, account_db_id, state.lease_id)
+                    publish_event("account.state", {"account_id": account_db_id, "state": state.state})
                     return
                 state.attempts += 1
                 delay = min(base * (2 ** min(state.attempts - 1, 6)), cap)
@@ -309,6 +334,59 @@ class AccountManager:
                 await asyncio.sleep(delay)
         state.state = "stopped"
         state.started_at = None
+        async with SessionLocal() as db:
+            await self._release_lease(db, account_db_id, state.lease_id)
+        publish_event("account.state", {"account_id": account_db_id, "state": "stopped"})
+
+    async def _acquire_lease(self, db: AsyncSession, account_db_id: int, lease_id: str) -> bool:
+        conn = await db.scalar(
+            select(AccountConnection).where(AccountConnection.account_id == account_db_id).with_for_update()
+        )
+        if not conn:
+            conn = AccountConnection(account_id=account_db_id)
+            db.add(conn)
+            await db.flush()
+        now = datetime.now(timezone.utc)
+        if conn.lease_id and conn.lease_expires_at:
+            expires = conn.lease_expires_at
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires > now:
+                return False
+        conn.lease_owner = settings.runtime_instance_id
+        conn.lease_id = lease_id
+        conn.lease_expires_at = now + timedelta(seconds=settings.account_lease_seconds)
+        await db.commit()
+        return True
+
+    async def _renew_lease(self, account_db_id: int, lease_id: str | None) -> bool:
+        if not lease_id:
+            return False
+        async with SessionLocal() as db:
+            conn = await db.scalar(select(AccountConnection).where(AccountConnection.account_id == account_db_id))
+            if not conn or conn.lease_id != lease_id:
+                return False
+            conn.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.account_lease_seconds)
+            await db.commit()
+            return True
+
+    async def _renew_lease_loop(self, account_db_id: int) -> None:
+        state = self._runtimes.get(account_db_id)
+        while state and not state.stop_requested:
+            await asyncio.sleep(max(3, settings.account_lease_renew_seconds))
+            if not await self._renew_lease(account_db_id, state.lease_id):
+                state.stop_requested = True
+                state.state = "error"
+                publish_event("account.state", {"account_id": account_db_id, "state": "error", "error": "运行租约已失效"})
+                return
+
+    async def _release_lease(self, db: AsyncSession, account_db_id: int, lease_id: str | None) -> None:
+        conn = await db.scalar(select(AccountConnection).where(AccountConnection.account_id == account_db_id))
+        if conn and (lease_id is None or conn.lease_id == lease_id):
+            conn.lease_owner = None
+            conn.lease_id = None
+            conn.lease_expires_at = None
+            await db.commit()
 
     async def _set_connection(
         self,

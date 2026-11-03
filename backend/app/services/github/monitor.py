@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import decrypt_secret
 from app.models import GithubEvent, GithubRelease, GithubRepository
 from app.services.github.client import GithubClient, GithubError
+from app.services.github.provider import build_repository_provider
 from app.services.github.notify import dispatch_release
 from app.services.logs import write_log
 
@@ -198,7 +199,7 @@ async def sync_releases(
 async def check_repository(
     db: AsyncSession, repo: GithubRepository, *, notify: bool = True, client: GithubClient | None = None
 ) -> dict[str, Any]:
-    client = client or GithubClient(decrypt_secret(repo.token_enc))
+    client = client or build_repository_provider(repo.provider, decrypt_secret(repo.token_enc))
     result: dict[str, Any] = {
         "repository_id": repo.id,
         "repository": repo.full_name,
@@ -225,6 +226,18 @@ async def check_repository(
         new_releases = await sync_releases(db, repo, client, notify=notify)
         result["new_releases"] = len(new_releases)
         result["releases"] = [r.tag_name for r in new_releases]
+        if notify and new_releases:
+            from app.models import PushRecord
+
+            push_rows = await db.scalars(
+                select(PushRecord).where(
+                    PushRecord.repository_id == repo.id,
+                    PushRecord.release_id.in_([release.id for release in new_releases]),
+                )
+            )
+            records = list(push_rows)
+            result["pushed"] = sum(1 for row in records if row.status == "success")
+            result["skipped"] = sum(1 for row in records if row.status == "skipped")
         result["ok"] = True
         result["message"] = f"检查完成，发现 {len(new_releases)} 个新版本"
         if new_releases:
@@ -265,7 +278,7 @@ async def import_repository_releases(
     db: AsyncSession, repo: GithubRepository, client: GithubClient | None = None
 ) -> int:
     """添加仓库时导入历史版本，避免把旧版本当成新版本推送。"""
-    client = client or GithubClient(decrypt_secret(repo.token_enc))
+    client = client or build_repository_provider(repo.provider, decrypt_secret(repo.token_enc))
     releases = await sync_releases(db, repo, client, notify=False, mark_notified=True)
     return len(releases)
 
