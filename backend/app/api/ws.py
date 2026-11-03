@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import func, select
 
+from app.core.events import event_hub
 from app.core.logging import hub
 from app.core.security import decode_access_token
 from app.db.session import SessionLocal
@@ -31,11 +32,41 @@ async def _authenticate(token: str | None) -> User | None:
         return user if user and user.is_active else None
 
 
+@router.websocket("/ws/events")
+async def ws_events(websocket: WebSocket, token: str | None = Query(default=None), account_id: int | None = Query(default=None)):
+    """统一事件流；兼容 token 查询认证，并按 account_id 过滤账号事件。"""
+    user = await _authenticate(token)
+    if not user or not ("*" in user.permission_set or "account:view" in user.permission_set or "log:view" in user.permission_set):
+        await websocket.close(code=4403 if user else 4401, reason="缺少实时事件权限" if user else "未授权")
+        return
+    await websocket.accept()
+    queue = await event_hub.subscribe()
+    try:
+        await websocket.send_json({"type": "connected", "id": None, "time": datetime.now(timezone.utc).isoformat(), "data": {"channels": ["log.created", "account.state", "status"]}})
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=25)
+                data = item.get("data") or {}
+                if account_id is not None and data.get("account_id") not in {None, account_id}:
+                    continue
+                await websocket.send_json(item)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping", "id": None, "time": datetime.now(timezone.utc).isoformat(), "data": {}})
+    except WebSocketDisconnect:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        await event_hub.unsubscribe(queue)
+        with contextlib.suppress(Exception):
+            await websocket.close()
+
+
 @router.websocket("/ws/logs")
 async def ws_logs(websocket: WebSocket, token: str | None = Query(default=None)):
     user = await _authenticate(token)
-    if not user:
-        await websocket.close(code=4401, reason="未授权")
+    if not user or not ("*" in user.permission_set or "log:view" in user.permission_set):
+        await websocket.close(code=4403 if user else 4401, reason="缺少日志权限" if user else "未授权")
         return
     await websocket.accept()
     queue = await hub.subscribe()
@@ -60,8 +91,8 @@ async def ws_logs(websocket: WebSocket, token: str | None = Query(default=None))
 @router.websocket("/ws/status")
 async def ws_status(websocket: WebSocket, token: str | None = Query(default=None)):
     user = await _authenticate(token)
-    if not user:
-        await websocket.close(code=4401, reason="未授权")
+    if not user or not ("*" in user.permission_set or "account:view" in user.permission_set):
+        await websocket.close(code=4403 if user else 4401, reason="缺少账号权限" if user else "未授权")
         return
     await websocket.accept()
     try:
@@ -72,9 +103,7 @@ async def ws_status(websocket: WebSocket, token: str | None = Query(default=None
                     select(func.count()).select_from(Message).where(Message.created_at >= today)
                 ) or 0
             states = account_manager.all_states()
-            payload = {
-                "type": "status",
-                "time": datetime.now(timezone.utc).isoformat(),
+            status_data = {
                 "online": sum(1 for s in states if s.state == "online"),
                 "error": sum(1 for s in states if s.state == "error"),
                 "total_runtime": len(states),
@@ -85,6 +114,9 @@ async def ws_status(websocket: WebSocket, token: str | None = Query(default=None
                     for s in states
                 ],
             }
+            payload = {"type": "status", "id": None, "time": datetime.now(timezone.utc).isoformat(), "data": status_data}
+            # 旧客户端仍可读取顶层 status 字段。
+            payload.update(status_data)
             await websocket.send_text(json.dumps(payload, ensure_ascii=False))
             await asyncio.sleep(5)
     except WebSocketDisconnect:

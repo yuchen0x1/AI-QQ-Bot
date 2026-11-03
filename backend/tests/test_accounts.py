@@ -137,6 +137,32 @@ async def test_multi_account_isolation(client: httpx.AsyncClient, admin_headers:
         await client.delete(f"/api/accounts/{account_b['id']}", headers=admin_headers)
 
 
+async def test_message_target_and_account_update_validation(
+    client: httpx.AsyncClient, admin_headers: dict[str, str], mock_account: dict
+):
+    both_targets = await client.post(
+        "/api/messages/send",
+        headers=admin_headers,
+        json={"account_id": mock_account["id"], "qq_group": 900001, "user_id": 20001, "content": "目标冲突"},
+    )
+    assert both_targets.status_code == 400
+    no_target = await client.post(
+        "/api/messages/send",
+        headers=admin_headers,
+        json={"account_id": mock_account["id"], "content": "缺少目标"},
+    )
+    assert no_target.status_code == 400
+
+    bad_reconnect = await client.put(
+        f"/api/accounts/{mock_account['id']}", headers=admin_headers, json={"reconnect_base_seconds": 0}
+    )
+    assert bad_reconnect.status_code == 422
+    bad_onebot = await client.put(
+        f"/api/accounts/{mock_account['id']}", headers=admin_headers, json={"protocol": "onebot11"}
+    )
+    assert bad_onebot.status_code == 400
+
+
 async def test_account_stats(client: httpx.AsyncClient, admin_headers: dict[str, str], mock_account: dict):
     stats = await client.get("/api/accounts/stats", headers=admin_headers)
     assert stats.status_code == 200

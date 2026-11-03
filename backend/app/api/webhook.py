@@ -22,7 +22,7 @@ router = APIRouter(prefix="/webhook", tags=["Webhook"])
 
 def verify_signature(secret: str, body: bytes, signature: str | None) -> bool:
     if not secret:
-        return True  # 未配置密钥时允许接收（文档中建议必须配置）
+        return False
     if not signature:
         return False
     expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
@@ -37,7 +37,9 @@ async def github_webhook(repo_id: int, request: Request, db: AsyncSession = Depe
     body = await request.body()
     secret = decrypt_secret(repo.webhook_secret_enc) or ""
     signature = request.headers.get("x-hub-signature-256")
-    if secret and not verify_signature(secret, body, signature):
+    if not secret:
+        raise HTTPException(status_code=409, detail="必须为 Webhook 配置 Secret")
+    if not verify_signature(secret, body, signature):
         await write_log(
             db,
             level="WARNING",

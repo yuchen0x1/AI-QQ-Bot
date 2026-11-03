@@ -61,8 +61,8 @@ async def send_message(
     account = await db.get(Account, payload.account_id)
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
-    if not payload.qq_group and not payload.user_id:
-        raise HTTPException(status_code=400, detail="请指定群号或用户 QQ")
+    if (payload.qq_group is None) == (payload.user_id is None):
+        raise HTTPException(status_code=400, detail="请且只能指定群号或用户 QQ 之一")
     try:
         if payload.qq_group:
             result = await account_manager.send_group_message(account.id, payload.qq_group, payload.content)

@@ -13,6 +13,7 @@ _TMP = Path(tempfile.mkdtemp(prefix="qbot-test-"))
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{(_TMP / 'test.db').as_posix()}"
 os.environ["SECRET_KEY"] = "unit-test-secret-key-please-ignore-0123456789"
 os.environ["SCHEDULER_ENABLED"] = "false"
+os.environ["ENV"] = "development"
 os.environ["DATA_DIR"] = str(_TMP / "data")
 os.environ["BACKUP_DIR"] = str(_TMP / "backups")
 os.environ["PLUGIN_DIR"] = str(Path(__file__).resolve().parents[1] / "plugins")

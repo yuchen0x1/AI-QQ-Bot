@@ -32,7 +32,8 @@ from app.schemas.github import (
     RepoOut,
     RepoUpdate,
 )
-from app.services.github.client import GithubClient, GithubError, parse_repo_url
+from app.services.github.client import GithubError
+from app.services.github.provider import build_repository_provider, parse_repository_url
 from app.services.github.monitor import check_repository, import_repository_releases
 from app.services.github.notify import resend_record
 from app.services.logs import audit, write_log
@@ -44,6 +45,7 @@ router = APIRouter(prefix="/github", tags=["GitHub监控"])
 def serialize_repo(repo: GithubRepository, rules: int = 0, releases: int = 0) -> RepoOut:
     return RepoOut(
         id=repo.id,
+        provider=repo.provider,
         owner=repo.owner,
         name=repo.name,
         full_name=repo.full_name,
@@ -99,13 +101,18 @@ async def list_repos(db: AsyncSession = Depends(get_db), _: User = Depends(requi
 
 @router.post("/repos", response_model=RepoOut, status_code=201)
 async def add_repo(payload: RepoCreate, db: AsyncSession = Depends(get_db), user: User = Depends(require("github:manage"))):
+    provider_name = (payload.provider or "github").lower()
     if payload.url:
         try:
-            owner, name = parse_repo_url(payload.url)
+            detected_provider, owner, name = parse_repository_url(payload.url)
+            if payload.provider == "github" and detected_provider != "github":
+                provider_name = detected_provider
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     else:
         owner, name = (payload.owner or "").strip(), (payload.name or "").strip()
+    if provider_name not in {"github", "gitee"}:
+        raise HTTPException(status_code=400, detail="provider 仅支持 github 或 gitee")
     if not owner or not name:
         raise HTTPException(status_code=400, detail="仓库 owner / name 不能为空")
     full_name = f"{owner}/{name}".lower()
@@ -113,7 +120,7 @@ async def add_repo(payload: RepoCreate, db: AsyncSession = Depends(get_db), user
     if exists:
         raise HTTPException(status_code=409, detail="该仓库已在监控列表中")
 
-    client = GithubClient(payload.token)
+    client = build_repository_provider(provider_name, payload.token)
     try:
         info = await client.get_repo(owner, name)
     except GithubError as exc:
@@ -124,10 +131,11 @@ async def add_repo(payload: RepoCreate, db: AsyncSession = Depends(get_db), user
         raise HTTPException(status_code=502, detail=f"请求 GitHub 失败：{exc}") from exc
 
     repo = GithubRepository(
+        provider=provider_name,
         owner=info.get("owner", {}).get("login") or owner,
         name=info.get("name") or name,
         full_name=info.get("full_name") or f"{owner}/{name}",
-        html_url=info.get("html_url") or f"https://github.com/{owner}/{name}",
+        html_url=info.get("html_url") or f"https://{'gitee.com' if provider_name == 'gitee' else 'github.com'}/{owner}/{name}",
         description=info.get("description"),
         default_branch=info.get("default_branch"),
         language=info.get("language"),
@@ -208,9 +216,10 @@ async def check_one(repo_id: int, db: AsyncSession = Depends(get_db), _: User = 
         repository_id=repo.id,
         ok=bool(result.get("ok")),
         new_releases=int(result.get("new_releases") or 0),
-        pushed=0,
+        pushed=int(result.get("pushed") or 0),
+        skipped=int(result.get("skipped") or 0),
         message=str(result.get("message") or ""),
-        releases=[],
+        releases=result.get("releases") or [],
     )
 
 
@@ -225,6 +234,8 @@ async def check_all(db: AsyncSession = Depends(get_db), _: User = Depends(requir
                 repository_id=repo.id,
                 ok=bool(result.get("ok")),
                 new_releases=int(result.get("new_releases") or 0),
+                pushed=int(result.get("pushed") or 0),
+                skipped=int(result.get("skipped") or 0),
                 message=str(result.get("message") or ""),
                 releases=result.get("releases") or [],
             )
@@ -331,7 +342,12 @@ async def update_rule(
     rule = await db.get(PushRule, rule_id)
     if not rule:
         raise HTTPException(status_code=404, detail="推送规则不存在")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if "account_id" in data:
+        account = await db.get(Account, data["account_id"])
+        if not account:
+            raise HTTPException(status_code=404, detail="QQ 账号不存在")
+    for field, value in data.items():
         setattr(rule, field, value)
     await db.commit()
     await db.refresh(rule)

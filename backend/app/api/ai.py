@@ -262,7 +262,7 @@ async def set_default_model(
 # 对话调试
 # ---------------------------------------------------------------------------
 @router.post("/chat", response_model=ChatResponse)
-async def chat(payload: ChatRequest, db: AsyncSession = Depends(get_db), _: User = Depends(require("ai:view"))):
+async def chat(payload: ChatRequest, db: AsyncSession = Depends(get_db), _: User = Depends(require("ai:manage"))):
     model = await ai_service.resolve_model(
         db, model_id=payload.model_id, account_id=payload.account_id, group_number=payload.group_number
     )

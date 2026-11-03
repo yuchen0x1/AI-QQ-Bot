@@ -167,6 +167,14 @@ async def update_account(
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
     data = payload.model_dump(exclude_unset=True)
+    next_protocol = data.get("protocol", account.protocol)
+    next_mode = data.get("connection_mode", account.connection_mode)
+    next_api_base = data.get("api_base", account.api_base)
+    next_ws_url = data.get("ws_url", account.ws_url)
+    if next_protocol == "onebot11" and not next_api_base:
+        raise HTTPException(status_code=400, detail="OneBot v11 账号必须填写 HTTP API 地址（例如 http://127.0.0.1:3000）")
+    if next_protocol == "onebot11" and next_mode == "ws_client" and not next_ws_url:
+        raise HTTPException(status_code=400, detail="ws_client 模式必须填写 WebSocket 地址（例如 ws://127.0.0.1:3001）")
     token = data.pop("access_token", None)
     if token is not None:
         account.access_token_enc = encrypt_secret(token) if token else None

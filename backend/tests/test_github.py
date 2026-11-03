@@ -210,13 +210,30 @@ async def test_prerelease_skipped(client: httpx.AsyncClient, admin_headers: dict
         content=body,
         headers={"x-github-event": "release", "x-github-delivery": "delivery-pre", "content-type": "application/json"},
     )
+    assert resp.status_code == 409
+    await client.put(f"/api/github/repos/{repo['id']}", headers=admin_headers, json={"webhook_secret": "whsec-pre"})
+    resp = await client.post(
+        f"/api/webhook/github/{repo['id']}",
+        content=body,
+        headers={"x-github-event": "release", "x-github-delivery": "delivery-pre", "content-type": "application/json", "x-hub-signature-256": _sign("whsec-pre", body)},
+    )
     assert resp.status_code == 200
     assert resp.json()["pushed"] == 0
 
 
+async def test_check_result_includes_push_counts(client: httpx.AsyncClient, admin_headers: dict, mock_account: dict):
+    repo = await _add_repo(client, admin_headers)
+    result = await client.post(f"/api/github/repos/{repo['id']}/check", headers=admin_headers)
+    assert result.status_code == 200
+    body = result.json()
+    assert {"pushed", "skipped", "releases"} <= body.keys()
+    assert isinstance(body["pushed"], int)
+    assert isinstance(body["skipped"], int)
+
+
 async def test_failed_push_then_retry(client: httpx.AsyncClient, admin_headers: dict, mock_account: dict):
     repo = await _add_repo(client, admin_headers)
-    await client.put(f"/api/github/repos/{repo['id']}", headers=admin_headers, json={"webhook_secret": ""})
+    await client.put(f"/api/github/repos/{repo['id']}", headers=admin_headers, json={"webhook_secret": "whsec-offline"})
     # The session-scoped test database retains earlier tests' data. Disable their
     # rules so this test verifies only the explicitly offline destination account.
     existing_rules = (await client.get("/api/github/push-rules", headers=admin_headers)).json()
@@ -244,6 +261,10 @@ async def test_failed_push_then_retry(client: httpx.AsyncClient, admin_headers: 
         },
     )
     assert rule.status_code == 201
+    invalid_update = await client.put(
+        f"/api/github/push-rules/{rule.json()['id']}", headers=admin_headers, json={"account_id": 999999}
+    )
+    assert invalid_update.status_code == 404
 
     body = json.dumps(
         {"action": "published", "release": _release("v4.0.0"), "repository": {"full_name": "octocat/hello"}}
@@ -251,7 +272,7 @@ async def test_failed_push_then_retry(client: httpx.AsyncClient, admin_headers: 
     resp = await client.post(
         f"/api/webhook/github/{repo['id']}",
         content=body,
-        headers={"x-github-event": "release", "x-github-delivery": "delivery-offline", "content-type": "application/json"},
+        headers={"x-github-event": "release", "x-github-delivery": "delivery-offline", "content-type": "application/json", "x-hub-signature-256": _sign("whsec-offline", body)},
     )
     assert resp.status_code == 200
     assert resp.json()["pushed"] == 0
