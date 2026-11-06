@@ -10,21 +10,87 @@ import { ref } from 'vue'
 import { useRealtimeSocket } from '../api'
 import ResourceView from '../components/ResourceView.vue'
 import QrLoginDialog from '../components/QrLoginDialog.vue'
+
 const resourceRef = ref(), qrRef = ref()
 const realtime = useRealtimeSocket<any>('/ws/status')
+
+const protocolOptions = [
+  { value: 'qq_official', label: 'QQ 官方机器人（推荐）' },
+  { value: 'onebot11', label: 'OneBot v11（兼容旧接入）' },
+  { value: 'mock', label: '模拟适配器（仅测试）' },
+]
+const connectionModeOptions = [
+  { value: 'ws_client', label: 'WebSocket 客户端' },
+  { value: 'ws_server', label: 'WebSocket 服务端' },
+  { value: 'http', label: 'HTTP API' },
+]
+const officialModeOptions = [
+  { value: 'official_ws', label: 'WebSocket（推荐，仅需出站连接）' },
+  { value: 'official_webhook', label: 'Webhook（需公网 HTTPS 回调地址）' },
+]
+const official = (f: any) => f.protocol === 'qq_official'
+const onebot = (f: any) => f.protocol === 'onebot11'
+const useWebhook = (f: any) => official(f) && f.connection_mode === 'official_webhook'
+
+// QQ 官方机器人字段：AppID / AppSecret 来自 QQ 开放平台「开发设置」，不走扫码登录。
+const officialFields = (editing: boolean) => [
+  { key: 'app_id', label: 'AppID（BotAppID）', required: !editing, showWhen: official, placeholder: 'QQ 开放平台 → 机器人 → 开发设置' },
+  { key: 'app_secret', label: 'AppSecret', type: 'password', required: !editing, showWhen: official, placeholder: editing ? '留空保持不变' : 'ClientSecret，仅加密存储在服务端' },
+  { key: 'connection_mode', label: '回调方式', type: 'select', default: 'official_ws', options: officialModeOptions, showWhen: official },
+  { key: 'webhook_url', label: 'Webhook 回调地址（复制到开放平台）', readonly: true, showWhen: useWebhook, placeholder: '保存账号后重新打开编辑即可复制完整地址' },
+  { key: 'official_sandbox', label: '沙箱环境', type: 'switch', default: false, showWhen: official },
+  { key: 'official_allow_proactive', label: '允许主动消息', type: 'switch', default: true, showWhen: official },
+  { key: 'official_intents', label: '事件 Intents 位值（仅 WebSocket）', type: 'number', default: 33554432, min: 0, max: 2147483647, showWhen: (f: any) => official(f) && !useWebhook(f) },
+  { key: 'official_api_base', label: 'OpenAPI 域名（可选）', showWhen: official, placeholder: '留空使用官方默认域名' },
+]
+const onebotFields = (editing: boolean) => [
+  // 与官方协议的 connection_mode 共用同一个提交字段，但表单内部用独立 key，避免默认值互相覆盖。
+  { key: 'onebot_connection_mode', payloadKey: 'connection_mode', label: '连接模式', type: 'select', default: 'ws_client', options: connectionModeOptions, showWhen: onebot },
+  { key: 'api_base', label: 'HTTP API 地址', showWhen: onebot, placeholder: 'http://127.0.0.1:3000' },
+  { key: 'ws_url', label: 'WebSocket 地址', showWhen: onebot, placeholder: 'ws://127.0.0.1:3001' },
+  { key: 'access_token', label: '访问令牌', type: 'password', showWhen: onebot, placeholder: editing ? '留空保持不变' : 'OneBot access token' },
+]
+const commonFields = () => [
+  { key: 'qq_number', label: 'QQ 号码（可选备注）', type: 'number', placeholder: '官方机器人无需填写' },
+  { key: 'enabled', label: '启用账号', type: 'switch', default: true },
+  { key: 'auto_start', label: '服务启动时自动连接', type: 'switch', default: false },
+  { key: 'auto_reconnect', label: '断线自动重连', type: 'switch', default: true },
+  { key: 'remark', label: '备注', placeholder: '可选' },
+]
+
 const config = {
-  kicker: 'QQ BOT FLEET', title: 'QQ 账号管理', description: '扫码登录优先；已有协议端可使用高级 OneBot 接入。账号显示异常时，请先确认 NapCat / OneBot 协议端已启动且地址填写正确', endpoint: '/accounts', paged: false, keyword: null, itemName: '账号', nameKey: 'name', actionWidth: 230,
-  columns: [{ key: 'name', label: '账号名称', width: 140 }, { key: 'qq_number', label: 'QQ 号码', width: 110 }, { key: 'protocol', label: '协议', width: 100, options: [{ value: 'onebot11', label: 'OneBot v11' }, { value: 'mock', label: '模拟适配器' }] }, { key: 'runtime_state', label: '运行状态', type: 'status', width: 95, options: [{ value: 'online', label: '在线' }, { value: 'stopped', label: '离线' }, { value: 'starting', label: '启动中' }, { value: 'error', label: '异常' }, { value: 'stopping', label: '停止中' }] }, { key: 'connection.status', label: '连接状态', type: 'status', width: 125, options: [{ value: 'online', label: '已连接' }, { value: 'error', label: '协议端未连接' }, { value: 'offline', label: '未连接' }, { value: 'connecting', label: '连接中' }] }, { key: 'group_count', label: '管理群数', width: 90 }, { key: 'auto_reconnect', label: '自动重连', type: 'bool', width: 90 }],
-  createLabel: '扫码添加 QQ', rawCreateLabel: '高级 OneBot 接入', secondaryCreateLabel: '高级 OneBot 接入', onCreate: () => qrRef.value?.open(), createFields: [
-    { key: 'name', label: '账号名称', required: true, placeholder: '例如：主机器人' },
-    { key: 'protocol', label: '协议适配器', type: 'select', default: 'onebot11', required: true, options: [{ value: 'onebot11', label: 'OneBot v11' }, { value: 'mock', label: '模拟适配器（仅测试）' }] },
-    { key: 'qq_number', label: 'QQ 号码', type: 'number', placeholder: '登录后可自动获取' },
-    { key: 'connection_mode', label: '连接模式', type: 'select', default: 'ws_client', options: [{ value: 'ws_client', label: 'WebSocket 客户端' }, { value: 'ws_server', label: 'WebSocket 服务端' }, { value: 'http', label: 'HTTP API' }] },
-    { key: 'api_base', label: 'HTTP API 地址', placeholder: 'http://127.0.0.1:3000' }, { key: 'ws_url', label: 'WebSocket 地址', placeholder: 'ws://127.0.0.1:3001' },
-    { key: 'access_token', label: '访问令牌', type: 'password', placeholder: 'OneBot access token' },
-    { key: 'enabled', label: '启用账号', type: 'switch', default: true }, { key: 'auto_start', label: '服务启动时自动连接', type: 'switch', default: false }, { key: 'auto_reconnect', label: '断线自动重连', type: 'switch', default: true }, { key: 'remark', label: '备注', placeholder: '可选' },
+  kicker: 'QQ BOT FLEET',
+  title: 'QQ 账号管理',
+  description: '默认使用 QQ 开放平台官方机器人：填 AppID + AppSecret 即可接入，无需扫码登录个人 QQ 号，不触发登录风控。回调方式二选一：WebSocket（推荐，只需出站连接）或 Webhook（需公网 HTTPS 地址 /api/qqbot/webhook/{AppID}，平台会先发起地址验证）。Webhook 模式下「在线」表示本地已就绪，仍需平台验证通过才会推送事件。请订阅「群聊 @ 消息 / 单聊消息」并配置 IP 白名单；旧版 NapCat / OneBot 保留为兼容选项。',
+  endpoint: '/accounts', paged: false, keyword: null, itemName: '账号', nameKey: 'name', actionWidth: 230,
+  columns: [
+    { key: 'name', label: '账号名称', width: 140 },
+    { key: 'app_id', label: 'AppID', width: 120 },
+    { key: 'qq_number', label: 'QQ 号码', width: 110 },
+    { key: 'protocol', label: '协议', width: 130, options: protocolOptions },
+    { key: 'connection_mode', label: '回调方式', width: 150, options: [...officialModeOptions, ...connectionModeOptions] },
+    { key: 'runtime_state', label: '运行状态', type: 'status', width: 95, options: [{ value: 'online', label: '在线' }, { value: 'stopped', label: '离线' }, { value: 'starting', label: '启动中' }, { value: 'error', label: '异常' }, { value: 'stopping', label: '停止中' }] },
+    { key: 'connection.status', label: '连接状态', type: 'status', width: 125, options: [{ value: 'online', label: '已连接' }, { value: 'error', label: '协议端未连接' }, { value: 'offline', label: '未连接' }, { value: 'connecting', label: '连接中' }] },
+    { key: 'group_count', label: '管理群数', width: 90 },
+    { key: 'auto_reconnect', label: '自动重连', type: 'bool', width: 90 },
   ],
-  editFields: [{ key: 'name', label: '账号名称', required: true }, { key: 'protocol', label: '协议适配器', type: 'select', options: [{ value: 'onebot11', label: 'OneBot v11' }, { value: 'mock', label: '模拟适配器' }] }, { key: 'qq_number', label: 'QQ 号码', type: 'number' }, { key: 'connection_mode', label: '连接模式', type: 'select', options: [{ value: 'ws_client', label: 'WebSocket 客户端' }, { value: 'ws_server', label: 'WebSocket 服务端' }, { value: 'http', label: 'HTTP API' }] }, { key: 'api_base', label: 'HTTP API 地址' }, { key: 'ws_url', label: 'WebSocket 地址' }, { key: 'access_token', label: '更新访问令牌', type: 'password', placeholder: '留空保持不变' }, { key: 'auto_reconnect', label: '断线自动重连', type: 'switch' }, { key: 'remark', label: '备注' }],
+  createLabel: '添加机器人', rawCreateLabel: '新增',
+  extraCreateLabel: 'NapCat 扫码（旧版）', extraCreateIcon: 'Iphone',
+  onExtraCreate: () => qrRef.value?.open(),
+  createFields: [
+    { key: 'name', label: '账号名称', required: true, placeholder: '例如：主机器人' },
+    { key: 'protocol', label: '协议适配器', type: 'select', default: 'qq_official', required: true, options: protocolOptions },
+    ...officialFields(false),
+    ...onebotFields(false),
+    ...commonFields(),
+  ],
+  editFields: [
+    { key: 'name', label: '账号名称', required: true },
+    { key: 'protocol', label: '协议适配器', type: 'select', options: protocolOptions },
+    ...officialFields(true),
+    ...onebotFields(true),
+    ...commonFields(),
+  ],
   actions: [
     { labelFor: (r: any) => r.runtime_state === 'online' ? '停止' : '启动', suffix: 'start', method: 'POST', type: 'success', path: (r: any) => `/accounts/${r.id}/${r.runtime_state === 'online' ? 'stop' : 'start'}` },
     { label: '重启', suffix: 'restart', method: 'POST', type: 'warning', confirm: '确定重启账号「{name}」吗？' },
@@ -34,4 +100,40 @@ const config = {
 }
 function reload() { resourceRef.value?.load() }
 </script>
-<style scoped>.account-live-bar{display:flex;align-items:center;gap:15px;min-height:34px;margin:-8px 0 12px;padding:7px 12px;border:1px solid #273141;border-radius:8px;background:#111823;color:#8d9ab0;font-size:10px}.account-live-bar .eyebrow{margin:0;color:#9481ff;font-size:9px}.live-count{display:inline-flex;align-items:center;gap:6px;color:#9bd9c4}.account-live-bar .socket-led{width:6px;height:6px;border-radius:50%}@media(max-width:600px){.account-live-bar{gap:9px;flex-wrap:wrap}}</style>
+<style scoped>
+.account-live-bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 38px;
+  margin: -10px 0 16px;
+  padding: 8px 16px;
+  border: 1px solid rgba(0, 242, 254, 0.25);
+  border-radius: 10px;
+  background: rgba(14, 22, 38, 0.7);
+  backdrop-filter: blur(12px);
+  color: #9cb2d4;
+  font-size: 11px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+.account-live-bar .eyebrow {
+  margin: 0;
+  color: #00f2fe;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+}
+.live-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #00f5a0;
+  font-weight: 500;
+}
+@media(max-width:600px){
+  .account-live-bar {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+}
+</style>

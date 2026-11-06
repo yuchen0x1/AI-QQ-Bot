@@ -19,6 +19,7 @@ TASK_TYPES = Literal[
     "health_check",
     "backup",
     "push_retry",
+    "clean_expired_data",
 ]
 
 

@@ -112,3 +112,28 @@ async def do_backup(db: AsyncSession = Depends(get_db), user: User = Depends(req
     await write_log(db, level="INFO", category="system", message=f"数据库备份完成：{path.name}，清理旧备份 {removed} 个")
     await audit(db, user_id=user.id, username=user.username, action="backup_database", target=path.name)
     return {"ok": True, "path": str(path), "pruned": removed, "message": f"备份已生成：{path.name}"}
+
+
+@router.post("/alert/test")
+async def test_alert(payload: dict, _: User = Depends(require("system:manage"))):
+    """测试第三方告警推送。"""
+    from app.core.http import new_client
+    from app.services.alerting import _build_payload, _detect_channel
+
+    url = str(payload.get("webhook_url") or "").strip()
+    channel_type = str(payload.get("channel_type") or "auto")
+    if not url:
+        raise HTTPException(status_code=400, detail="缺少 webhook_url")
+
+    channel = _detect_channel(url, channel_type)
+    body = _build_payload(channel, "通道连通性测试", "这是一条来自 QBot AI 管理控制台的告警测试消息。如果您收到本条通知，说明系统告警通道配置正常！")
+
+    try:
+        async with new_client(timeout=10.0) as client:
+            resp = await client.post(url, json=body)
+            if resp.status_code >= 400:
+                return {"ok": False, "message": f"平台返回错误 HTTP {resp.status_code}: {resp.text[:200]}"}
+            return {"ok": True, "message": "测试推送成功"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"请求失败: {exc}"}
+

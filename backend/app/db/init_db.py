@@ -1,4 +1,4 @@
-"""数据库初始化：建表、内置角色、管理员、系统配置、内置命令、插件同步。"""
+"""数据库初始化：Alembic 负责建表/升级，本模块只负责幂等的种子数据写入。"""
 
 from __future__ import annotations
 
@@ -9,8 +9,9 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.permissions import ROLE_DEFS
 from app.core.security import hash_password
-from app.db.session import SessionLocal, engine
-from app.models import Base, Role, SystemSetting, User
+from app.db.migrations import upgrade_schema
+from app.db.session import SessionLocal
+from app.models import Role, SystemSetting, User
 from app.services.commands import seed_commands
 from app.services.github.notify import DEFAULT_TEMPLATE
 from app.services.plugins import plugin_manager
@@ -24,16 +25,14 @@ DEFAULT_SETTINGS: list[dict] = [
     {"key": "push_default_template", "value": DEFAULT_TEMPLATE, "description": "默认推送模板"},
     {"key": "panel_title", "value": "QBot 控制台", "description": "后台标题"},
     {"key": "auto_backup_keep", "value": 14, "description": "保留的备份数量"},
+    {"key": "data_retention_days", "value": 30, "description": "消息与日志数据保留天数（0 表示永久）"},
+    {"key": "alert_webhook_url", "value": "", "description": "异常告警 Webhook 地址（支持飞书/钉钉/企业微信/通用）"},
+    {"key": "alert_channel_type", "value": "auto", "description": "告警通道类型：auto/feishu/dingtalk/wechat/custom"},
 ]
 
 
-async def create_schema() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("数据库表结构已就绪")
-
-
 async def seed() -> None:
+    """写入内置角色、初始管理员、系统设置、命令与插件；可重复执行。"""
     async with SessionLocal() as db:
         for role_def in ROLE_DEFS:
             role = await db.scalar(select(Role).where(Role.name == role_def["name"]))
@@ -81,9 +80,9 @@ async def seed() -> None:
         logger.info("初始化数据已写入")
 
 
-async def init_database(*, create_tables: bool = True) -> None:
-    if create_tables:
-        await create_schema()
+async def init_database() -> None:
+    """先把 schema 升级到 Alembic head，再写入种子数据；schema 与数据互不混用。"""
+    await upgrade_schema()
     await seed()
 
 

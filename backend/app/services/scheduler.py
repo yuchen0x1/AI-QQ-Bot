@@ -166,6 +166,43 @@ async def _task_push_retry(payload: dict[str, Any]) -> dict[str, Any]:
     return stats
 
 
+async def _task_clean_expired_data(payload: dict[str, Any]) -> dict[str, Any]:
+    """定时清理过期的消息、系统日志、任务执行记录及 AI 调用统计。"""
+    from sqlalchemy import delete
+    from app.models import Message, SystemLog, TaskRecord, AIUsageLog, SystemSetting
+
+    async with SessionLocal() as db:
+        days = payload.get("days")
+        if not days:
+            setting = await db.scalar(select(SystemSetting).where(SystemSetting.key == "data_retention_days"))
+            days = (setting.value or {}).get("value") if setting else 30
+        days = int(days or 30)
+        if days <= 0:
+            return {"status": "skipped", "reason": "retention disabled (days <= 0)"}
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        msg_res = await db.execute(delete(Message).where(Message.created_at < cutoff))
+        log_res = await db.execute(delete(SystemLog).where(SystemLog.created_at < cutoff))
+        task_res = await db.execute(delete(TaskRecord).where(TaskRecord.started_at < cutoff))
+        ai_res = await db.execute(delete(AIUsageLog).where(AIUsageLog.created_at < cutoff))
+        await db.commit()
+
+        deleted = {
+            "messages": msg_res.rowcount or 0,
+            "logs": log_res.rowcount or 0,
+            "task_records": task_res.rowcount or 0,
+            "ai_usage_logs": ai_res.rowcount or 0,
+            "days": days,
+        }
+        await write_log(
+            db,
+            level="INFO",
+            category="task",
+            message=f"历史数据清理完成（保留 {days} 天）：删除消息 {deleted['messages']} 条，日志 {deleted['logs']} 条，任务记录 {deleted['task_records']} 条",
+        )
+        return deleted
+
+
 TASK_HANDLERS: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] = {
     "github_check": _task_github_check,
     "github_check_all": _task_github_check,
@@ -176,6 +213,7 @@ TASK_HANDLERS: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] 
     "ai_summary": _task_ai_summary,
     "backup": _task_backup,
     "push_retry": _task_push_retry,
+    "clean_expired_data": _task_clean_expired_data,
 }
 
 

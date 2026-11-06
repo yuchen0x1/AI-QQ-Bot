@@ -31,15 +31,20 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
-def provider_to_client(model: AIModel) -> BaseAIProvider:
+def provider_to_client(
+    model: AIModel,
+    *,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> BaseAIProvider:
     provider: AIProvider = model.provider
     return build_provider(
         provider.kind,
         base_url=provider.base_url,
         api_key=decrypt_secret(provider.api_key_enc),
         model_name=model.model_name,
-        temperature=model.temperature,
-        max_tokens=model.max_tokens,
+        temperature=temperature if temperature is not None else model.temperature,
+        max_tokens=max_tokens if max_tokens is not None else model.max_tokens,
         timeout=model.timeout_seconds,
         extra_headers=provider.extra_headers or None,
     )
@@ -131,6 +136,8 @@ async def chat_once(
     account_id: int | None = None,
     group_number: int | None = None,
     allow_fallback: bool = True,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> tuple[ChatResult | None, str | None, AIModel]:
     """调用模型，带重试与备用模型降级。返回 (结果, 错误, 实际使用的模型)。"""
     attempts = max(1, model.retries + 1)
@@ -138,7 +145,7 @@ async def chat_once(
     for attempt in range(attempts):
         started = time.perf_counter()
         try:
-            client = provider_to_client(model)
+            client = provider_to_client(model, temperature=temperature, max_tokens=max_tokens)
             result = await client.chat(messages, system=system)
             latency = int((time.perf_counter() - started) * 1000)
             model.total_calls += 1

@@ -87,3 +87,41 @@ async def test_change_password(client: httpx.AsyncClient, admin_headers: dict[st
     )
     assert ok.status_code == 200
     assert (await client.post("/api/auth/login", json={"username": "pwd_user", "password": "New@123456"})).status_code == 200
+
+
+async def test_old_token_revoked_after_password_change(client: httpx.AsyncClient, admin_headers: dict[str, str]):
+    """修改密码后，改密前签发的 JWT 必须立即失效。"""
+    await client.post(
+        "/api/users",
+        headers=admin_headers,
+        json={"username": "revoke_user", "password": "Old@12345"},
+    )
+    login = await client.post("/api/auth/login", json={"username": "revoke_user", "password": "Old@12345"})
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    assert (await client.get("/api/auth/me", headers=headers)).status_code == 200
+
+    changed = await client.post(
+        "/api/auth/password", headers=headers, json={"old_password": "Old@12345", "new_password": "New@123456"}
+    )
+    assert changed.status_code == 200
+
+    client.cookies.clear()  # 确保只携带旧 Bearer Token
+    assert (await client.get("/api/auth/me", headers=headers)).status_code == 401
+
+
+async def test_admin_reset_password_revokes_user_tokens(client: httpx.AsyncClient, admin_headers: dict[str, str]):
+    """管理员重置用户密码后，该用户旧 Token 必须失效。"""
+    await client.post(
+        "/api/users",
+        headers=admin_headers,
+        json={"username": "reset_user", "password": "Old@12345"},
+    )
+    login = await client.post("/api/auth/login", json={"username": "reset_user", "password": "Old@12345"})
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    users = (await client.get("/api/users", headers=admin_headers, params={"keyword": "reset_user"})).json()
+    target = next(u for u in users["items"] if u["username"] == "reset_user")
+
+    client.cookies.clear()
+    resp = await client.put(f"/api/users/{target['id']}", headers=admin_headers, json={"password": "Reset@123456"})
+    assert resp.status_code == 200
+    assert (await client.get("/api/auth/me", headers=headers)).status_code == 401

@@ -417,7 +417,9 @@ async def dispatch(
             account_id=account.id,
             context={"command": name, "args": rest, "role": role},
         )
-    return result or None
+    # 空字符串是有意义的返回值：表示「命令已接管，但回复交给 AI 生成」。
+    # 这里不能用 `result or None`，否则空串会被吞成 None，/ai 永远不会触发回复。
+    return result
 
 
 def utcnow() -> datetime:

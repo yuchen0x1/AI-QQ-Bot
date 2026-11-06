@@ -17,11 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.base import AdapterError, QQAdapter, UnsupportedAction
 from app.adapters.mock import MockAdapter
 from app.adapters.onebot11 import OneBot11Adapter
+from app.adapters.qq_official import QQOfficialAdapter
 from app.core.config import settings
 from app.core.events import publish_event
 from app.core.security import decrypt_secret
 from app.db.session import SessionLocal
 from app.models import Account, AccountConnection, Group, GroupMember, GroupSettings
+from app.schemas.account import DEFAULT_OFFICIAL_INTENTS
 from app.services.logs import write_log
 
 logger = logging.getLogger("qbot.accounts")
@@ -42,10 +44,20 @@ _FRIENDLY_NETWORK_KEYWORDS = (
 )
 
 
-def _friendly_connection_error(exc: Exception) -> str:
+def _friendly_connection_error(exc: Exception, protocol: str = "onebot11") -> str:
     """把底层连接报错翻译成用户能看懂的提示，避免满屏晦涩堆栈。"""
     raw = f"{type(exc).__name__}: {exc}"
     lowered = str(exc).lower()
+    if protocol == "qq_official":
+        # 官方适配器抛出的错误本身已经带平台错误码与排查建议。
+        if any(k in lowered for k in _FRIENDLY_NETWORK_KEYWORDS):
+            return (
+                f"无法连接 QQ 官方机器人平台（{raw}）。请检查：1) 服务器能否访问 "
+                "bots.qq.com / api.bot.qq.com；2) 开放平台的回调方式与账号设置是否一致"
+                "（WebSocket / Webhook）；3) IP 白名单是否包含本机公网出口 IP；"
+                "4) Webhook 模式下回调地址是否公网 HTTPS 可达"
+            )
+        return raw
     if any(k in lowered for k in ("http 502", "http 503", "http 504")):
         return f"协议端无响应（{raw}）。通常是 NapCat/OneBot 协议端未启动或正在重启，请先启动协议端再观察"
     if any(k in lowered for k in _FRIENDLY_NETWORK_KEYWORDS):
@@ -87,6 +99,27 @@ class RuntimeState:
 def build_adapter(account: Account) -> QQAdapter:
     if account.protocol == "mock":
         return MockAdapter(self_id=account.qq_number or 10000, nickname=account.nickname or account.name)
+    if account.protocol == "qq_official":
+        features = account.features or {}
+        secret = decrypt_secret(account.app_secret_enc)
+        if not account.app_id or not secret:
+            raise AdapterError(
+                "QQ 官方机器人缺少 AppID / AppSecret，或密钥无法解密（SECRET_KEY 变更会导致旧密文失效，请重新填写）"
+            )
+        return QQOfficialAdapter(
+            account_db_id=account.id,
+            app_id=account.app_id,
+            app_secret=secret,
+            sandbox=bool(features.get("official_sandbox", False)),
+            intents=int(features.get("official_intents", DEFAULT_OFFICIAL_INTENTS)),
+            allow_proactive=bool(features.get("official_allow_proactive", True)),
+            callback_mode=(
+                "webhook" if account.connection_mode == "official_webhook" else "websocket"
+            ),
+            bot_openid=account.bot_openid or "",
+            nickname=account.nickname or account.name,
+            api_base=features.get("official_api_base") or None,
+        )
     return OneBot11Adapter(
         api_base=account.api_base,
         ws_url=account.ws_url,
@@ -131,6 +164,11 @@ class AccountManager:
                     raise ValueError("账号不存在")
                 if not account.enabled:
                     raise ValueError("账号已被禁用，请先启用")
+                # 先构建适配器再占用运行租约：凭据缺失时不会留下 45 秒的僵尸租约。
+                try:
+                    adapter = build_adapter(account)
+                except AdapterError as exc:
+                    raise ValueError(str(exc)) from exc
                 lease_id = uuid.uuid4().hex
                 if not await self._acquire_lease(db, account.id, lease_id):
                     raise ValueError("账号已被其它运行实例占用，请稍后重试")
@@ -138,7 +176,7 @@ class AccountManager:
                     account_db_id=account.id,
                     account_uid=account.account_id,
                     name=account.name,
-                    adapter=build_adapter(account),
+                    adapter=adapter,
                     state="starting",
                     lease_id=lease_id,
                 )
@@ -234,7 +272,10 @@ class AccountManager:
                         account.self_id = info.self_id or account.self_id
                         account.nickname = info.nickname or account.nickname
                         account.avatar_url = info.avatar_url or account.avatar_url
-                        if not account.qq_number and info.self_id:
+                        if account.protocol == "qq_official" and isinstance(adapter, QQOfficialAdapter):
+                            # 官方机器人没有 QQ 号，self_id 是 AppID 数值；只记录机器人 OpenID。
+                            account.bot_openid = adapter.bot_openid or account.bot_openid
+                        elif not account.qq_number and info.self_id:
                             account.qq_number = info.self_id
                         await db.commit()
                     await self._set_connection(
@@ -288,7 +329,7 @@ class AccountManager:
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001
-                friendly = _friendly_connection_error(exc)
+                friendly = _friendly_connection_error(exc, getattr(adapter, "protocol", "onebot11"))
                 state.last_error = friendly
                 state.state = "error"
                 state.started_at = None
@@ -486,26 +527,40 @@ class AccountManager:
 
     # ------------------------------------------------------------------
     async def send_group_message(
-        self, account_db_id: int, group_number: int, content: str
+        self,
+        account_db_id: int,
+        group_number: int,
+        content: str,
+        *,
+        markdown: dict[str, Any] | None = None,
+        keyboard: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         adapter = self.adapter(account_db_id)
         if not adapter:
             raise AdapterError("账号不在线，无法发送消息")
         if not adapter.supports("send_group_message"):
             raise UnsupportedAction("当前协议端不支持发送群消息")
-        result = await adapter.send_group_message(group_number, content)
+        result = await adapter.send_group_message(group_number, content, markdown=markdown, keyboard=keyboard)
         state = self._runtimes.get(account_db_id)
         if state:
             state.messages_sent += 1
         return result
 
-    async def send_private_message(self, account_db_id: int, user_id: int, content: str) -> dict[str, Any]:
+    async def send_private_message(
+        self,
+        account_db_id: int,
+        user_id: int,
+        content: str,
+        *,
+        markdown: dict[str, Any] | None = None,
+        keyboard: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         adapter = self.adapter(account_db_id)
         if not adapter:
             raise AdapterError("账号不在线，无法发送消息")
         if not adapter.supports("send_private_message"):
             raise UnsupportedAction("当前协议端不支持发送私聊消息")
-        result = await adapter.send_private_message(user_id, content)
+        result = await adapter.send_private_message(user_id, content, markdown=markdown, keyboard=keyboard)
         state = self._runtimes.get(account_db_id)
         if state:
             state.messages_sent += 1

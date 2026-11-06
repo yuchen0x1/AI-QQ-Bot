@@ -1,5 +1,6 @@
 <template>
-  <div class="page-heading"><div><div class="eyebrow">{{ config.kicker || 'MANAGEMENT' }}</div><h1>{{ config.title }}</h1><p>{{ config.description }}</p></div><div class="heading-actions"><el-button v-if="config.secondaryAction" :icon="config.secondaryAction.icon || 'Refresh'" @click="runSecondary">{{ config.secondaryAction.label }}</el-button><el-button v-if="config.secondaryCreateLabel" :icon="config.secondaryCreateIcon || 'Setting'" @click="openRawCreate">{{ config.secondaryCreateLabel }}</el-button><el-button v-if="config.createFields?.length && !config.hideCreate" type="primary" :icon="Plus" @click="openCreate">{{ config.createLabel || '新增' }}</el-button></div></div>
+  <div class="page-heading"><div><div class="eyebrow">{{ config.kicker || 'MANAGEMENT' }}</div><h1>{{ config.title }}</h1><p>{{ config.description }}</p></div><div class="heading-actions"><el-button v-if="config.secondaryAction" :icon="config.secondaryAction.icon || 'Refresh'" @click="runSecondary">{{ config.secondaryAction.label }}</el-button><el-button v-if="config.secondaryCreateLabel" :icon="config.secondaryCreateIcon || 'Setting'" @click="openRawCreate">{{ config.secondaryCreateLabel }}</el-button><el-button v-if="config.extraCreateLabel" :icon="config.extraCreateIcon || 'Iphone'" @click="runExtraCreate">{{ config.extraCreateLabel }}</el-button><el-button v-if="config.createFields?.length && !config.hideCreate" type="primary" :icon="Plus" @click="openCreate">{{ config.createLabel || '新增' }}</el-button></div></div>
+  <slot name="panel" />
   <section class="surface resource-surface">
     <div class="resource-toolbar"><div class="filter-row"><el-input v-if="config.keyword" v-model="filters.keyword" clearable :placeholder="config.keyword" :prefix-icon="Search" @keyup.enter="load(1)" @clear="load(1)" /><el-select v-for="filter in config.filters || []" :key="filter.key" v-model="filters[filter.key]" clearable :placeholder="filter.label" @change="load(1)"><el-option v-for="option in filter.options" :key="option.value" :label="option.label" :value="option.value" /></el-select><el-select v-if="config.statusFilter" v-model="filters.status" clearable placeholder="状态" @change="load(1)"><el-option v-for="o in config.statusFilter" :key="o.value" :label="o.label" :value="o.value" /></el-select><el-button :icon="Search" @click="load(1)">查询</el-button></div><el-button text :icon="Refresh" @click="load()">刷新</el-button></div>
     <el-table v-loading="loading" :data="rows" row-key="id" stripe empty-text="暂无数据" style="width:100%">
@@ -11,7 +12,7 @@
     <div v-if="paged" class="pagination-wrap"><span>共 {{ total }} 条</span><el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[10,20,50,100]" layout="sizes, prev, pager, next" @current-change="load" @size-change="load(1)" /></div>
   </section>
   <el-dialog v-model="dialog" :title="editing ? '编辑' + config.itemName : (config.rawCreateLabel || config.createLabel || '新增') + config.itemName" width="min(620px, calc(100vw - 28px))" destroy-on-close>
-    <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="resource-form"><el-form-item v-for="field in activeFields" :key="field.key" :label="field.label" :prop="field.required ? field.key : undefined"><el-select v-if="field.type === 'select'" v-model="form[field.key]" :placeholder="field.placeholder || '请选择'" clearable :disabled="field.disabled"><el-option v-for="o in field.options" :key="o.value" :label="o.label" :value="o.value" /></el-select><el-switch v-else-if="field.type === 'switch'" v-model="form[field.key]" /><el-input-number v-else-if="field.type === 'number'" v-model="form[field.key]" :min="field.min ?? 0" :max="field.max" :step="field.step || 1" :placeholder="field.placeholder" /><el-input v-else-if="field.type === 'textarea' || field.type === 'json'" v-model="form[field.key]" type="textarea" :rows="field.rows || 3" :placeholder="field.placeholder" /><el-input v-else v-model="form[field.key]" :type="field.type === 'password' ? 'password' : 'text'" :show-password="field.type === 'password'" :placeholder="field.placeholder || field.label" :disabled="field.disabled" /></el-form-item></el-form>
+    <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="resource-form"><el-form-item v-for="field in activeFields" :key="field.key" :label="field.label" :prop="field.required ? field.key : undefined"><el-select v-if="field.type === 'select'" v-model="form[field.key]" :placeholder="field.placeholder || '请选择'" clearable :disabled="field.disabled || field.readonly"><el-option v-for="o in field.options" :key="o.value" :label="o.label" :value="o.value" /></el-select><el-switch v-else-if="field.type === 'switch'" v-model="form[field.key]" /><el-input-number v-else-if="field.type === 'number'" v-model="form[field.key]" :min="field.min ?? 0" :max="field.max" :step="field.step || 1" :placeholder="field.placeholder" /><el-input v-else-if="field.type === 'textarea' || field.type === 'json'" v-model="form[field.key]" type="textarea" :rows="field.rows || 3" :placeholder="field.placeholder" /><el-input v-else v-model="form[field.key]" :type="field.type === 'password' ? 'password' : 'text'" :show-password="field.type === 'password'" :placeholder="field.placeholder || field.label" :disabled="!!field.disabled" :readonly="!!field.readonly" /></el-form-item></el-form>
     <template #footer><el-button @click="dialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
   </el-dialog>
 </template>
@@ -24,17 +25,18 @@ const props = defineProps<{ config: any }>()
 const config = computed(() => props.config)
 const rows = ref<any[]>([]), loading = ref(false), saving = ref(false), dialog = ref(false), editing = ref(false), formRef = ref(), activeRow = ref<any>(), page = ref(1), pageSize = ref(20), total = ref(0)
 const paged = computed(() => config.value.paged !== false)
-const activeFields = computed(() => editing.value ? (config.value.editFields || config.value.createFields || []) : (config.value.createFields || []))
+const activeFields = computed(() => { const fields = editing.value ? (config.value.editFields || config.value.createFields || []) : (config.value.createFields || []); return (fields || []).filter((f: any) => !f.showWhen || f.showWhen(form)) })
 const filters = reactive<Record<string, any>>(Object.fromEntries([...(config.value.filters || []).map((f: any) => [f.key, '']), ...(config.value.keyword ? [['keyword', '']] : [])]))
 const form = reactive<Record<string, any>>({})
 const rules = computed(() => Object.fromEntries((activeFields.value || []).filter((x: any) => x.required).map((x: any) => [x.key, [{ required: true, message: `${x.label}不能为空`, trigger: 'blur' }]])) as any)
 function params() { const p: Record<string, any> = {}; if (paged.value) { p.page = page.value; p.page_size = pageSize.value }; for (const [k,v] of Object.entries(filters)) if (v !== undefined && v !== '' && v !== null) { const filter = config.value.filters?.find((x: any) => x.key === k); p[filter?.param || k] = v }; if (config.value.keyword && filters.keyword) p.keyword = filters.keyword; return p }
 async function load(target?: number) { if (target) page.value = target; loading.value = true; try { const { data } = await api.get(config.value.endpoint, { params: params() }); const payload = data?.items ? data : data?.data?.items ? data.data : data; rows.value = Array.isArray(payload) ? payload : (payload.items || []); total.value = Array.isArray(payload) ? rows.value.length : (payload.total ?? rows.value.length) } finally { loading.value = false } }
-function resetForm(row?: any) { Object.keys(form).forEach(k => delete form[k]); const fields = row ? (config.value.editFields || config.value.createFields || []) : (config.value.createFields || []); for (const field of fields) { let value = row?.[field.key]; if (value === undefined || value === null) value = field.default ?? (field.type === 'switch' ? false : field.type === 'number' ? 0 : ''); if (field.type === 'json' && typeof value !== 'string') value = JSON.stringify(value, null, 2); form[field.key] = value } }
+function resetForm(row?: any) { Object.keys(form).forEach(k => delete form[k]); const fields = row ? (config.value.editFields || config.value.createFields || []) : (config.value.createFields || []); for (const field of fields) { let value = row?.[field.payloadKey || field.key]; if (value === undefined || value === null) value = field.default ?? (field.type === 'switch' ? false : field.type === 'number' ? 0 : ''); if (field.type === 'json' && typeof value !== 'string') value = JSON.stringify(value, null, 2); form[field.key] = value } }
 function openCreate() { if (config.value.onCreate) { config.value.onCreate(); return }; openRawCreate() }
+function runExtraCreate() { config.value.onExtraCreate?.() }
 function openRawCreate() { editing.value = false; activeRow.value = null; resetForm(); dialog.value = true }
 function openEdit(row: any) { editing.value = true; activeRow.value = row; resetForm(row); dialog.value = true }
-async function save() { await formRef.value?.validate(async (valid: boolean) => { if (!valid) return; saving.value = true; try { const payload: Record<string, any> = {}; for (const f of activeFields.value) { let value = form[f.key]; if (f.type === 'json' && typeof value === 'string') { try { value = JSON.parse(value) } catch { ElMessage.error(`${f.label}必须是合法 JSON`); return } }; payload[f.key] = value }; if (editing.value) await api.put(`${config.value.endpoint}/${activeRow.value.id}`, payload); else await api.post(config.value.createEndpoint || config.value.endpoint, payload); ElMessage.success('已保存'); dialog.value = false; await load() } finally { saving.value = false } }) }
+async function save() { await formRef.value?.validate(async (valid: boolean) => { if (!valid) return; saving.value = true; try { const payload: Record<string, any> = {}; for (const f of activeFields.value) { if (f.readonly) continue; let value = form[f.key]; if (f.type === 'json' && typeof value === 'string') { try { value = JSON.parse(value) } catch { ElMessage.error(`${f.label}必须是合法 JSON`); return } }; payload[f.payloadKey || f.key] = value }; if (editing.value) await api.put(`${config.value.endpoint}/${activeRow.value.id}`, payload); else await api.post(config.value.createEndpoint || config.value.endpoint, payload); ElMessage.success('已保存'); dialog.value = false; await load() } finally { saving.value = false } }) }
 async function remove(row: any) { try { await ElMessageBox.confirm(`确定删除${config.value.itemName}「${row[config.value.nameKey || 'name'] || row.id}」吗？此操作不可撤销。`, '确认删除', { type: 'warning' }); await api.delete(`${config.value.deletePath || config.value.endpoint}/${row.id}`); ElMessage.success('已删除'); await load() } catch {} }
 async function runAction(action: any, row: any) { try { if (action.handler) { await action.handler(row, load); return }; if (action.confirm) await ElMessageBox.confirm(action.confirm.replace('{name}', row[config.value.nameKey || 'name'] || row.id), '确认操作', { type: action.type === 'danger' ? 'warning' : 'info' }); const url = action.path ? (typeof action.path === 'function' ? action.path(row) : action.path.replace('{id}', row.id)) : `${config.value.endpoint}/${row.id}/${action.suffix}`; const body = typeof action.body === 'function' ? action.body(row) : action.body; const { data } = await api.request({ url, method: action.method || 'POST', data: body }); ElMessage.success(action.success?.(data) || data?.detail || data?.message || '操作已完成'); await load() } catch {} }
 async function runSecondary() { const a = config.value.secondaryAction; if (!a) return; try { if (a.confirm) await ElMessageBox.confirm(a.confirm, '确认操作'); const { data } = await api.request({ url: a.path || config.value.endpoint + (a.suffix || ''), method: a.method || 'POST', data: a.body || {} }); ElMessage.success(a.success?.(data) || data?.detail || data?.message || '操作已完成'); await load() } catch {} }
@@ -45,4 +47,79 @@ function formatDate(value: any) { return value ? new Date(value).toLocaleString(
 onMounted(() => load())
 defineExpose({ openCreate, load, rows })
 </script>
-<style scoped>.resource-surface{padding:0;overflow:hidden}.resource-toolbar{padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #273141}.filter-row,.heading-actions,.row-actions{display:flex;align-items:center;gap:8px}.filter-row .el-input{width:230px}.filter-row .el-select{width:150px}.pagination-wrap{display:flex;align-items:center;justify-content:space-between;padding:14px 17px;color:#8390a4;font-size:11px}.resource-form{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}.resource-form .el-form-item:has(.el-textarea),.resource-form .el-form-item:has(textarea){grid-column:1/-1}.resource-form .el-select,.resource-form .el-input-number{width:100%}.row-actions{gap:5px;white-space:nowrap}.table-link{color:#a899ff;text-decoration:none}.table-link:hover{text-decoration:underline}.page-heading{gap:16px}@media(max-width:700px){.resource-toolbar{align-items:flex-start}.filter-row{flex-wrap:wrap}.filter-row .el-input{width:100%}.filter-row .el-select{width:calc(50% - 5px)}.pagination-wrap{flex-direction:column;align-items:flex-start;gap:10px}.resource-form{grid-template-columns:1fr}.resource-form .el-form-item:has(.el-textarea),.resource-form .el-form-item:has(textarea){grid-column:1}.heading-actions{flex-shrink:0}.page-heading .el-button{font-size:11px}}</style>
+<style scoped>
+.resource-surface {
+  padding: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: rgba(13, 19, 32, 0.75);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(56, 75, 110, 0.35);
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.4);
+}
+.resource-toolbar {
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid rgba(56, 75, 110, 0.35);
+  background: rgba(16, 24, 40, 0.4);
+}
+.filter-row, .heading-actions, .row-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.filter-row .el-input { width: 240px; }
+.filter-row .el-select { width: 160px; }
+.pagination-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  color: #8c9cb6;
+  font-size: 11px;
+  border-top: 1px solid rgba(56, 75, 110, 0.25);
+  background: rgba(16, 24, 40, 0.25);
+}
+.resource-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 20px;
+}
+.resource-form .el-form-item:has(.el-textarea), .resource-form .el-form-item:has(textarea) {
+  grid-column: 1 / -1;
+}
+.resource-form .el-select, .resource-form .el-input-number {
+  width: 100%;
+}
+.row-actions {
+  gap: 6px;
+  white-space: nowrap;
+}
+.table-link {
+  color: #00f2fe;
+  text-decoration: none;
+  transition: all 0.15s;
+}
+.table-link:hover {
+  color: #68f7ff;
+  text-shadow: 0 0 8px rgba(0, 242, 254, 0.5);
+  text-decoration: underline;
+}
+.page-heading {
+  gap: 16px;
+}
+@media(max-width:700px){
+  .resource-toolbar { align-items: flex-start; }
+  .filter-row { flex-wrap: wrap; }
+  .filter-row .el-input { width: 100%; }
+  .filter-row .el-select { width: calc(50% - 5px); }
+  .pagination-wrap { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .resource-form { grid-template-columns: 1fr; }
+  .resource-form .el-form-item:has(.el-textarea), .resource-form .el-form-item:has(textarea) { grid-column: 1; }
+  .heading-actions { flex-shrink: 0; }
+  .page-heading .el-button { font-size: 11px; }
+}
+</style>

@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 
 from app.core.events import event_hub
 from app.core.logging import hub
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, token_matches_user
 from app.db.session import SessionLocal
 from app.models import Message, User
 from app.services.account_manager import account_manager
@@ -29,7 +29,9 @@ async def _authenticate(token: str | None) -> User | None:
         return None
     async with SessionLocal() as db:
         user = await db.scalar(select(User).where(User.username == payload.get("sub")))
-        return user if user and user.is_active else None
+        if not user or not user.is_active or not token_matches_user(payload, user.password_hash):
+            return None
+        return user
 
 
 @router.websocket("/ws/events")

@@ -47,6 +47,21 @@ async def write_log(
     # 旧日志 Hub 保留，统一事件总线同时提供跨业务 WS 事件格式。
     hub.publish(item)
     publish_event("log.created", item, event_id=str(record.id) if record.id else None)
+
+    # 错误级别日志异步触发第三方告警
+    if record.level in ("ERROR", "CRITICAL"):
+        try:
+            import asyncio
+            from app.services.alerting import send_alert
+            asyncio.create_task(
+                send_alert(
+                    title=f"系统错误 [{record.category}]",
+                    content=f"账号: {record.account_id or '全局'}\n详情: {record.message}",
+                )
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
     return record
 
 

@@ -1,6 +1,18 @@
 # TEST_REPORT
 
-测试日期：2026-11-03（Windows 11，Python 3.13.12，Node/npm 环境）
+## 最新一轮：2026-11-05（GitHub OAuth）
+
+| 分类 | 命令/范围 | 结果 |
+|---|---|---|
+| 已通过 | `python -m pytest -q`（backend） | **85 passed**（新增 6 项 GitHub OAuth） |
+| 已通过 | `python -m ruff check app tests migrations` | **All checks passed** |
+| 已通过 | `npm run build`（frontend） | `vue-tsc -b` + Vite 生产构建成功 |
+| 已通过 | `alembic check`（迁移与模型一致性） | 0005 后无差异 |
+| 已通过 | 线上部署验证 | `alembic current = 0005_github_oauth`、`/api/system/health` ok、`/github` 200、OAuth 7 个端点在 OpenAPI 中可见 |
+
+新增覆盖：OAuth App 配置读写、完整授权链路（state 签名 → code 换 Token → 绑定）、伪造/缺失 state 拒绝、Token 交换失败回跳、仓库批量导入与重复导入 skipped、按归属用户取用 Token、跨用户仓库隔离（列表隐藏 + 详情 403）、解绑保留仓库。测试用 `httpx.MockTransport` 拦截 GitHub 请求，不访问真实 GitHub。
+
+历史记录（2026-11-03）：Windows 11，Python 3.13.12，Node/npm 环境。
 
 ## 结果总览
 

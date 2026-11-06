@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import AdapterError
 from app.api.deps import client_ip, require
+from app.core.config import settings
 from app.core.security import encrypt_secret
 from app.db.session import get_db
 from app.models import Account, AccountConnection, Group, Message, SystemLog, User
@@ -21,6 +22,7 @@ from app.schemas.account import (
     AccountStatsOut,
     AccountUpdate,
     ConnectionOut,
+    DEFAULT_OFFICIAL_INTENTS,
 )
 from app.schemas.common import MessageOut
 from app.services.account_manager import account_manager, build_adapter
@@ -28,11 +30,39 @@ from app.services.logs import audit, write_log
 
 router = APIRouter(prefix="/accounts", tags=["QQ账号"])
 
+OFFICIAL_FEATURE_KEYS = (
+    "official_sandbox",
+    "official_intents",
+    "official_allow_proactive",
+    "official_api_base",
+)
+OFFICIAL_MODES = ("official_ws", "official_webhook")
+ONEBOT_MODES = ("ws_client", "ws_server", "http")
+OFFICIAL_FEATURE_DEFAULTS = {
+    "official_sandbox": False,
+    "official_intents": DEFAULT_OFFICIAL_INTENTS,
+    "official_allow_proactive": True,
+    "official_api_base": "",
+}
+
+
+def official_features(account: Account) -> dict[str, Any]:
+    features = account.features or {}
+    return {key: features.get(key, default) for key, default in OFFICIAL_FEATURE_DEFAULTS.items()}
+
+
+def webhook_url(account: Account) -> str | None:
+    if not account.app_id:
+        return None
+    base = settings.public_base_url.rstrip("/")
+    return f"{base}{settings.api_prefix}/qqbot/webhook/{account.app_id}"
+
 
 def serialize(account: Account, groups: int = 0) -> AccountOut:
     state = account_manager.get(account.id)
     runtime = state.state if state else "stopped"
     capabilities = account_manager.capabilities(account.id)
+    official = official_features(account)
     return AccountOut(
         id=account.id,
         account_id=account.account_id,
@@ -45,13 +75,21 @@ def serialize(account: Account, groups: int = 0) -> AccountOut:
         api_base=account.api_base,
         ws_url=account.ws_url,
         self_id=account.self_id,
+        app_id=account.app_id,
+        bot_openid=account.bot_openid,
+        webhook_url=webhook_url(account),
+        has_token=bool(account.access_token_enc),
+        has_secret=bool(account.app_secret_enc),
+        official_sandbox=bool(official["official_sandbox"]),
+        official_intents=int(official["official_intents"]),
+        official_allow_proactive=bool(official["official_allow_proactive"]),
+        official_api_base=official["official_api_base"] or None,
         enabled=account.enabled,
         auto_start=account.auto_start,
         auto_reconnect=account.auto_reconnect,
         remark=account.remark,
         created_at=account.created_at,
         connection=ConnectionOut.model_validate(account.connection) if account.connection else None,
-        has_token=bool(account.access_token_enc),
         online_seconds=state.online_seconds if state else 0,
         group_count=groups,
         capabilities=capabilities,
@@ -114,25 +152,46 @@ async def create_account(
 ):
     if payload.protocol == "onebot11" and not payload.api_base:
         raise HTTPException(status_code=400, detail="OneBot v11 账号必须填写 HTTP API 地址（例如 http://127.0.0.1:3000）")
-    if payload.connection_mode == "ws_client" and not payload.ws_url:
-        raise HTTPException(status_code=400, detail="ws_client 模式必须填写 WebSocket 地址（例如 ws://127.0.0.1:3001）")
+    if payload.protocol == "onebot11" and payload.connection_mode == "ws_client" and not payload.ws_url:
+        raise HTTPException(status_code=400, detail="OneBot ws_client 模式必须填写 WebSocket 地址（例如 ws://127.0.0.1:3001）")
+    if payload.protocol == "qq_official" and (not payload.app_id or not payload.app_secret):
+        raise HTTPException(
+            status_code=400,
+            detail="QQ 官方机器人必须填写 AppID 和 AppSecret（在 QQ 开放平台 → 机器人 → 开发设置 中获取）",
+        )
+    official_config = {
+        "official_sandbox": bool(payload.official_sandbox),
+        "official_intents": int(payload.official_intents),
+        "official_allow_proactive": bool(payload.official_allow_proactive),
+        "official_api_base": payload.official_api_base or "",
+    }
+    if payload.protocol == "qq_official":
+        connection_mode = (
+            payload.connection_mode if payload.connection_mode in OFFICIAL_MODES else "official_ws"
+        )
+    else:
+        connection_mode = (
+            payload.connection_mode if payload.connection_mode in ONEBOT_MODES else "ws_client"
+        )
     account = Account(
         account_id=uuid.uuid4().hex[:12],
         name=payload.name,
         qq_number=payload.qq_number,
         nickname=payload.nickname,
         protocol=payload.protocol,
-        connection_mode=payload.connection_mode,
+        connection_mode=connection_mode,
         api_base=payload.api_base,
         ws_url=payload.ws_url,
         access_token_enc=encrypt_secret(payload.access_token),
+        app_id=payload.app_id if payload.protocol == "qq_official" else None,
+        app_secret_enc=encrypt_secret(payload.app_secret) if payload.protocol == "qq_official" else None,
         enabled=payload.enabled,
         auto_start=payload.auto_start,
         auto_reconnect=payload.auto_reconnect,
         reconnect_base_seconds=payload.reconnect_base_seconds,
         reconnect_max_seconds=payload.reconnect_max_seconds,
         remark=payload.remark,
-        features={},
+        features=official_config,
     )
     db.add(account)
     await db.commit()
@@ -171,13 +230,29 @@ async def update_account(
     next_mode = data.get("connection_mode", account.connection_mode)
     next_api_base = data.get("api_base", account.api_base)
     next_ws_url = data.get("ws_url", account.ws_url)
+    next_app_id = data.get("app_id", account.app_id)
     if next_protocol == "onebot11" and not next_api_base:
         raise HTTPException(status_code=400, detail="OneBot v11 账号必须填写 HTTP API 地址（例如 http://127.0.0.1:3000）")
     if next_protocol == "onebot11" and next_mode == "ws_client" and not next_ws_url:
-        raise HTTPException(status_code=400, detail="ws_client 模式必须填写 WebSocket 地址（例如 ws://127.0.0.1:3001）")
+        raise HTTPException(status_code=400, detail="OneBot ws_client 模式必须填写 WebSocket 地址（例如 ws://127.0.0.1:3001）")
+    if next_protocol == "qq_official" and (not next_app_id or not (data.get("app_secret") or account.app_secret_enc)):
+        raise HTTPException(status_code=400, detail="QQ 官方机器人必须填写 AppID 和 AppSecret")
+    if next_protocol == "qq_official":
+        if next_mode not in OFFICIAL_MODES:
+            data["connection_mode"] = "official_ws"
+    elif next_mode in OFFICIAL_MODES:
+        # 协议切换回 OneBot / Mock 时不能残留官方专属接入模式。
+        data["connection_mode"] = "ws_client"
+    # 空字符串表示「保持不变」：编辑表单不会回传密钥，避免每次保存都清空凭据。
     token = data.pop("access_token", None)
-    if token is not None:
-        account.access_token_enc = encrypt_secret(token) if token else None
+    if token:
+        account.access_token_enc = encrypt_secret(token)
+    secret = data.pop("app_secret", None)
+    if secret:
+        account.app_secret_enc = encrypt_secret(secret)
+    incoming_features = {key: data.pop(key) for key in OFFICIAL_FEATURE_KEYS if key in data}
+    if incoming_features:
+        account.features = {**(account.features or {}), **incoming_features}
     for field, value in data.items():
         setattr(account, field, value)
     await db.commit()
@@ -321,6 +396,19 @@ async def test_connection(
         raise HTTPException(status_code=404, detail="账号不存在")
     adapter = build_adapter(account)
     try:
+        if account.protocol == "qq_official":
+            # 官方机器人只做凭证 / 网关连通性探测，不占用长连接会话额度。
+            probe = await adapter.probe()
+            await adapter.disconnect()
+            env = "沙箱" if probe["sandbox"] else "正式"
+            if probe.get("callback_mode") == "webhook":
+                message = (
+                    f"凭证有效（{env}环境）。请在开放平台把回调地址设为 "
+                    f"{webhook_url(account)}，保持账号在线后平台会发起地址验证"
+                )
+            else:
+                message = f"凭证有效，网关可用（{env}环境）。启动账号后即可接收事件"
+            return {"ok": True, "message": message, "data": probe}
         info = await adapter.connect()
         groups = await adapter.get_group_list()
         await adapter.disconnect()

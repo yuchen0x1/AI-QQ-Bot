@@ -1,5 +1,15 @@
 <template>
-  <div class="page-heading"><div><div class="eyebrow">MODEL HUB</div><h1>AI 模型中心</h1><p>统一管理模型供应商、API 密钥、默认模型与对话测试</p></div><el-button type="primary" :icon="Plus" @click="providerDialog=true">添加供应商</el-button></div>
+    <div class="page-heading">
+      <div>
+        <div class="eyebrow">MODEL HUB</div>
+        <h1>AI 模型中心</h1>
+        <p>统一管理模型供应商、API 密钥、默认模型与对话测试沙盒</p>
+      </div>
+      <div class="heading-actions">
+        <el-button type="success" plain :icon="Cpu" @click="openPlayground">AI 调试沙盒</el-button>
+        <el-button type="primary" :icon="Plus" @click="providerDialog=true">添加供应商</el-button>
+      </div>
+    </div>
   <div class="ai-overview"><div><span>供应商</span><b>{{ providers.length }}</b><small>{{ providers.filter(p => p.enabled).length }} 个启用</small></div><div><span>可用模型</span><b>{{ models.filter(m => m.enabled !== false).length }}</b><small>{{ models.filter(m => m.is_default).length ? '已设置默认模型' : '尚未设置默认模型' }}</small></div><div><span>近期调用</span><b>{{ usageTotal }}</b><small>最近调用记录</small></div><div><span>调用状态</span><b class="ai-ok">{{ usage.filter(u => u.status === 'success').length }}</b><small>{{ usage.filter(u => u.status !== 'success').length }} 条异常</small></div><div class="ai-live"><i class="socket-led open"></i><span>数据来自 AI 服务接口</span></div></div>
   <div class="ai-layout">
     <section class="surface providers"><div class="surface-head"><div><h3>模型供应商</h3><p>兼容 OpenAI 格式及常用服务商</p></div></div><div v-if="!providers.length" class="empty-inline"><el-icon><Connection/></el-icon><span>尚未添加供应商</span></div><div v-for="p in providers" :key="p.id" class="provider-card"><div class="provider-head"><div class="provider-icon"><el-icon><Cpu/></el-icon></div><div class="provider-title"><b>{{p.name}}</b><small>{{p.kind}} · {{p.base_url}}</small></div><el-tag :type="p.enabled?'success':'info'" size="small" effect="dark">{{p.enabled?'启用':'停用'}}</el-tag></div><div class="provider-foot"><span>{{p.model_count}} 个模型</span><span>{{p.has_api_key?'API Key 已保存':'未配置 API Key'}}</span><div class="provider-buttons"><el-button link type="primary" @click="testProvider(p)">测试</el-button><el-button link @click="openEditProvider(p)">编辑</el-button><el-button link type="danger" @click="removeProvider(p)">删除</el-button></div></div></div></section>
@@ -9,6 +19,66 @@
   <el-dialog v-model="providerDialog" :title="editingProvider?'编辑供应商':'添加供应商'" width="min(560px,calc(100vw - 28px))"><el-form ref="providerRef" :model="providerForm" :rules="providerRules" label-position="top"><el-form-item label="供应商名称" prop="name"><el-input v-model="providerForm.name" placeholder="例如：DeepSeek 主账号"/></el-form-item><el-form-item label="类型" prop="kind"><el-select v-model="providerForm.kind" style="width:100%"><el-option v-for="o in providerKinds" :key="o.value" :label="o.label" :value="o.value"/></el-select></el-form-item><el-form-item label="API Base URL" prop="base_url"><el-input v-model="providerForm.base_url" placeholder="https://api.example.com/v1"/></el-form-item><el-form-item label="API Key" prop="api_key"><el-input v-model="providerForm.api_key" type="password" show-password :placeholder="editingProvider?'留空保持原密钥':'粘贴 API Key'"/></el-form-item><el-form-item label="启用" prop="enabled"><el-switch v-model="providerForm.enabled"/></el-form-item><el-form-item label="备注"><el-input v-model="providerForm.remark"/></el-form-item></el-form><template #footer><el-button @click="providerDialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="saveProvider">保存</el-button></template></el-dialog>
   <el-dialog v-model="modelDialog" title="添加模型" width="min(560px,calc(100vw - 28px))"><el-form ref="modelRef" :model="modelForm" :rules="modelRules" label-position="top"><el-form-item label="所属供应商" prop="provider_id"><el-select v-model="modelForm.provider_id" style="width:100%"><el-option v-for="p in providers.filter(x=>x.enabled)" :key="p.id" :label="p.name" :value="p.id"/></el-select></el-form-item><el-form-item label="Model ID" prop="model_name"><el-input v-model="modelForm.model_name" placeholder="例如：deepseek-chat / gpt-4o-mini"/></el-form-item><el-form-item label="显示名称"><el-input v-model="modelForm.display_name" placeholder="可选"/></el-form-item><div class="form-cols"><el-form-item label="温度"><el-input-number v-model="modelForm.temperature" :min="0" :max="2" :step="0.1"/></el-form-item><el-form-item label="最大输出 Token"><el-input-number v-model="modelForm.max_tokens" :min="16" :max="200000" :step="256"/></el-form-item></div><div class="form-cols"><el-form-item label="优先级"><el-input-number v-model="modelForm.priority" :min="1" :max="999"/></el-form-item><el-form-item label="超时（秒）"><el-input-number v-model="modelForm.timeout_seconds" :min="5" :max="600"/></el-form-item></div><el-form-item><el-checkbox v-model="modelForm.is_default">设为默认模型</el-checkbox><el-checkbox v-model="modelForm.is_fallback">备用模型</el-checkbox><el-checkbox v-model="modelForm.enabled">启用</el-checkbox></el-form-item></el-form><template #footer><el-button @click="modelDialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="saveModel">保存</el-button></template></el-dialog>
   <el-dialog v-model="chatDialog" title="模型对话测试" width="min(680px,calc(100vw - 28px))"><div class="chat-model-label">当前模型：{{chatModel?.display_name||chatModel?.model_name}}</div><div class="chat-messages" ref="chatBox"><div v-for="(m,i) in chatMessages" :key="i" class="chat-line" :class="m.role"><div class="chat-role">{{m.role==='user'?'你':'AI'}}</div><div class="chat-bubble">{{m.content}}</div></div><div v-if="chatLoading" class="chat-line assistant"><div class="chat-role">AI</div><div class="chat-bubble typing">正在生成回复…</div></div></div><div class="chat-entry"><el-input v-model="chatInput" type="textarea" :rows="2" placeholder="输入消息开始测试…" @keydown.ctrl.enter="sendChat"/><el-button type="primary" :loading="chatLoading" @click="sendChat">发送</el-button></div></el-dialog>
+
+  <!-- 全功能 AI 对话调试沙盒 Playground -->
+  <el-dialog v-model="playgroundVisible" title="AI 对话调试沙盒（Playground）" width="min(980px,calc(100vw - 28px))" destroy-on-close>
+    <div class="playground-container">
+      <div class="playground-sidebar">
+        <h4>参数调优</h4>
+        <el-form label-position="top" size="small">
+          <el-form-item label="调试模型">
+            <el-select v-model="pgModelId" style="width:100%" placeholder="选择模型">
+              <el-option v-for="m in models.filter(x=>x.enabled!==false)" :key="m.id" :label="`${m.display_name||m.model_name}${m.is_default?' (默认)':''}`" :value="m.id"/>
+            </el-select>
+          </el-form-item>
+          <el-form-item label="System Prompt（人设与预设指令）">
+            <el-input v-model="pgSystemPrompt" type="textarea" :rows="4" placeholder="例如：你是开源项目的群聊助手，回答口语化并带幽默感..."/>
+          </el-form-item>
+          <div class="pg-presets">
+            <span class="subtext">快捷人设：</span>
+            <el-tag size="small" effect="plain" class="pointer-tag" @click="pgSystemPrompt='你是 QQ 群里友好、活泼的助手，回答简洁明了，适当使用可爱颜文字。'">活泼助手</el-tag>
+            <el-tag size="small" effect="plain" class="pointer-tag" @click="pgSystemPrompt='你是严谨的软件架构师与资深全栈工程师，回答精准、注重代码规范与架构安全性。'">资深架构师</el-tag>
+            <el-tag size="small" effect="plain" class="pointer-tag" @click="pgSystemPrompt='你是毒舌群管，说话犀利风趣但逻辑清晰，喜欢调侃群员但乐于助人。'">幽默毒舌</el-tag>
+          </div>
+          <el-form-item label="温度 (Temperature)" style="margin-top:12px">
+            <el-slider v-model="pgTemperature" :min="0" :max="2" :step="0.1" show-input :show-input-controls="false"/>
+          </el-form-item>
+          <el-form-item label="最大 Tokens">
+            <el-input-number v-model="pgMaxTokens" :min="64" :max="32000" :step="256" style="width:100%"/>
+          </el-form-item>
+          <div style="display:flex;justify-content:space-between;margin-top:16px">
+            <el-button size="small" @click="clearPlayground">清空历史</el-button>
+            <span class="subtext" style="align-self:center">已记录 {{ pgMessages.length }} 条上下文</span>
+          </div>
+        </el-form>
+      </div>
+      <div class="playground-chat">
+        <div class="chat-messages pg-messages" ref="pgChatBox">
+          <div v-if="!pgMessages.length" class="empty-inline" style="padding:40px 0">
+            <el-icon><Cpu/></el-icon>
+            <span>输入内容或点击快捷人设，免打开 QQ 直接调试 AI 交互效果</span>
+          </div>
+          <div v-for="(m, i) in pgMessages" :key="i" class="chat-line" :class="m.role">
+            <div class="chat-role">{{ m.role === 'user' ? '你' : 'AI' }}</div>
+            <div class="chat-bubble">
+              {{ m.content }}
+              <div v-if="m.meta" class="bubble-meta">
+                <span>{{ m.meta.latency_ms }}ms</span> · <span>Prompt: {{ m.meta.usage?.prompt_tokens ?? '-' }}</span> · <span>Comp: {{ m.meta.usage?.completion_tokens ?? '-' }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-if="pgLoading" class="chat-line assistant">
+            <div class="chat-role">AI</div>
+            <div class="chat-bubble typing">正在生成回复并追踪 Token 消耗…</div>
+          </div>
+        </div>
+        <div class="chat-entry">
+          <el-input v-model="pgInput" type="textarea" :rows="3" placeholder="按 Ctrl+Enter 快速发送消息…" @keydown.ctrl.enter="sendPlayground"/>
+          <el-button type="primary" :loading="pgLoading" @click="sendPlayground">发送</el-button>
+        </div>
+      </div>
+    </div>
+  </el-dialog>
 </template>
 <script setup lang="ts">
 import { nextTick, onMounted, reactive, ref } from 'vue'
@@ -16,6 +86,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Cpu, Connection, Plus, Refresh } from '@element-plus/icons-vue'
 import { api } from '../api'
 const providers=ref<any[]>([]),models=ref<any[]>([]),usage=ref<any[]>([]),loading=ref(false),usageLoading=ref(false),saving=ref(false),providerDialog=ref(false),modelDialog=ref(false),editingProvider=ref(false),providerRef=ref(),modelRef=ref(),providerRow=ref<any>(),chatDialog=ref(false),chatModel=ref<any>(),chatMessages=ref<any[]>([]),chatInput=ref(''),chatLoading=ref(false),chatBox=ref<HTMLElement>(),usagePage=ref(1),usageTotal=ref(0)
+// AI Playground 调试沙盒状态
+const playgroundVisible=ref(false),pgModelId=ref<number|null>(null),pgSystemPrompt=ref(''),pgTemperature=ref(0.7),pgMaxTokens=ref(2048),pgMessages=ref<any[]>([]),pgInput=ref(''),pgLoading=ref(false),pgChatBox=ref<HTMLElement>()
 const providerKinds=[{value:'openai',label:'OpenAI 兼容'},{value:'deepseek',label:'DeepSeek'},{value:'qwen',label:'通义千问 Qwen'},{value:'moonshot',label:'Moonshot'},{value:'gemini',label:'Google Gemini'},{value:'anthropic',label:'Anthropic'},{value:'ollama',label:'Ollama 本地模型'},{value:'custom',label:'自定义'}]
 const providerForm=reactive<any>({name:'',kind:'openai',base_url:'',api_key:'',enabled:true,remark:''}),modelForm=reactive<any>({provider_id:null,model_name:'',display_name:'',temperature:0.7,max_tokens:2048,timeout_seconds:60,retries:1,priority:100,is_default:false,is_fallback:false,enabled:true})
 const providerRules={name:[{required:true,message:'请填写名称',trigger:'blur'}],base_url:[{required:true,message:'请填写 API Base URL',trigger:'blur'}]},modelRules={provider_id:[{required:true,message:'请选择供应商',trigger:'change'}],model_name:[{required:true,message:'请填写 Model ID',trigger:'blur'}]}
@@ -33,7 +105,73 @@ async function setDefault(m:any){try{const {data}=await api.post(`/ai/models/${m
 async function removeModel(m:any){try{await ElMessageBox.confirm(`删除模型「${m.display_name||m.model_name}」？`,'确认删除',{type:'warning'});await api.delete(`/ai/models/${m.id}`);ElMessage.success('已删除');await load()}catch{}}
 async function sendChat(){const text=chatInput.value.trim();if(!text||chatLoading.value)return;chatMessages.value.push({role:'user',content:text});chatInput.value='';chatLoading.value=true;await scrollChat();try{const {data}=await api.post('/ai/chat',{model_id:chatModel.value.id,messages:chatMessages.value.map(m=>({role:m.role==='assistant'?'assistant':'user',content:m.content}))});if(data.ok)chatMessages.value.push({role:'assistant',content:data.content});else ElMessage.error(data.error||'模型调用失败')}finally{chatLoading.value=false;await scrollChat()}}
 async function scrollChat(){await nextTick();if(chatBox.value)chatBox.value.scrollTop=chatBox.value.scrollHeight}
+function openPlayground(){
+  const defaultModel = models.value.find(m => m.is_default) || models.value.find(m => m.enabled !== false)
+  if (defaultModel) pgModelId.value = defaultModel.id
+  playgroundVisible.value = true
+}
+function clearPlayground(){
+  pgMessages.value = []
+  pgInput.value = ''
+}
+async function sendPlayground(){
+  const text = pgInput.value.trim()
+  if (!text || pgLoading.value) return
+  if (!pgModelId.value) {
+    ElMessage.warning('请选择要测试的 AI 模型')
+    return
+  }
+  pgMessages.value.push({ role: 'user', content: text })
+  pgInput.value = ''
+  pgLoading.value = true
+  await scrollPlayground()
+  try {
+    const { data } = await api.post('/ai/chat', {
+      model_id: pgModelId.value,
+      system_prompt: pgSystemPrompt.value || undefined,
+      temperature: pgTemperature.value,
+      max_tokens: pgMaxTokens.value,
+      messages: pgMessages.value.map(m => ({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: m.content,
+      }))
+    })
+    if (data.ok) {
+      pgMessages.value.push({
+        role: 'assistant',
+        content: data.content,
+        meta: {
+          latency_ms: data.latency_ms,
+          usage: data.usage,
+          model: data.model_name,
+        }
+      })
+    } else {
+      ElMessage.error(data.error || '模型调用失败')
+    }
+  } catch (err: any) {
+    ElMessage.error(err.response?.data?.detail || '请求失败')
+  } finally {
+    pgLoading.value = false
+    await scrollPlayground()
+  }
+}
+async function scrollPlayground(){
+  await nextTick()
+  if (pgChatBox.value) pgChatBox.value.scrollTop = pgChatBox.value.scrollHeight
+}
 function formatDate(v:string){return v?new Date(v).toLocaleString('zh-CN'):'—'}
 onMounted(async()=>{newProvider();await load()})
 </script>
-<style scoped>.ai-overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;align-items:center;gap:10px;margin-bottom:14px}.ai-overview>div{padding:12px 14px;border:1px solid #293346;border-radius:10px;background:#121a27;display:flex;flex-direction:column;gap:4px}.ai-overview span{font-size:10px;color:#8d99ad}.ai-overview b{font-size:20px;color:#eef2f8}.ai-overview small{font-size:9px;color:#708097}.ai-overview .ai-ok{color:#69d7ac}.ai-overview .ai-live{flex-direction:row;align-items:center;gap:7px;border-color:#23413b;color:#8fd6bc;white-space:nowrap;background:#111c1b}.ai-overview .socket-led{width:6px;height:6px;border-radius:50%;background:#4bd4a0;box-shadow:0 0 0 3px #4bd4a020}.ai-layout{display:grid;grid-template-columns:330px minmax(0,1fr);gap:14px}.providers{grid-row:span 2}.provider-card{border:1px solid #2a3444;background:#121925;border-radius:10px;padding:13px;margin-bottom:10px}.provider-head{display:flex;align-items:center;gap:10px}.provider-icon{width:33px;height:33px;border-radius:9px;background:#30284c;color:#ad9aff;display:grid;place-items:center}.provider-title{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}.provider-title b{font-size:12px}.provider-title small{font-size:9px;color:#8793a7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.provider-foot{border-top:1px solid #293241;margin-top:12px;padding-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:9px;color:#8290a5}.provider-buttons{margin-left:auto;display:flex;gap:6px}.provider-buttons .el-button{font-size:10px}.models,.usage{min-width:0}.ml-8{margin-left:8px}.subtext{font-size:9px;color:#79869a;margin-top:4px}.muted{color:#748197;font-size:10px}.form-cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}.form-cols .el-input-number{width:100%}.chat-model-label{font-size:11px;color:#8f9ab0;margin-bottom:12px}.chat-messages{height:310px;overflow:auto;border:1px solid #2b3545;border-radius:10px;background:#0e1420;padding:14px}.chat-line{display:flex;gap:10px;margin-bottom:13px;align-items:flex-start}.chat-line.user{flex-direction:row-reverse}.chat-role{width:26px;height:26px;flex:none;border-radius:8px;display:grid;place-items:center;background:#30284e;color:#b6a5ff;font-size:10px}.chat-line.user .chat-role{background:#21364a;color:#71c8e6}.chat-bubble{max-width:80%;padding:9px 12px;border-radius:4px 10px 10px 10px;background:#1b2331;color:#dce3ef;font-size:11px;line-height:1.65;white-space:pre-wrap;word-break:break-word}.chat-line.user .chat-bubble{border-radius:10px 4px 10px 10px;background:#292442}.chat-bubble.typing{color:#91a0b8}.chat-entry{display:flex;gap:9px;margin-top:10px;align-items:flex-end}.chat-entry .el-input{flex:1}.pagination-wrap{display:flex;justify-content:space-between;align-items:center;padding-top:12px;color:#8390a4;font-size:10px}.page-heading{margin-bottom:20px}@media(max-width:1000px){.ai-layout{grid-template-columns:1fr}.providers{grid-row:auto}.provider-card{max-width:100%}}@media(max-width:650px){.form-cols{grid-template-columns:1fr;gap:0}.models .el-table{min-width:760px}.models{overflow:auto}.provider-foot{gap:6px}.page-heading .el-button{font-size:11px}}</style>
+<style scoped>.ai-overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;align-items:center;gap:10px;margin-bottom:14px}.ai-overview>div{padding:12px 14px;border:1px solid #293346;border-radius:10px;background:#121a27;display:flex;flex-direction:column;gap:4px}.ai-overview span{font-size:10px;color:#8d99ad}.ai-overview b{font-size:20px;color:#eef2f8}.ai-overview small{font-size:9px;color:#708097}.ai-overview .ai-ok{color:#69d7ac}.ai-overview .ai-live{flex-direction:row;align-items:center;gap:7px;border-color:#23413b;color:#8fd6bc;white-space:nowrap;background:#111c1b}.ai-overview .socket-led{width:6px;height:6px;border-radius:50%;background:#4bd4a0;box-shadow:0 0 0 3px #4bd4a020}.ai-layout{display:grid;grid-template-columns:330px minmax(0,1fr);gap:14px}.providers{grid-row:span 2}.provider-card{border:1px solid #2a3444;background:#121925;border-radius:10px;padding:13px;margin-bottom:10px}.provider-head{display:flex;align-items:center;gap:10px}.provider-icon{width:33px;height:33px;border-radius:9px;background:#30284c;color:#ad9aff;display:grid;place-items:center}.provider-title{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}.provider-title b{font-size:12px}.provider-title small{font-size:9px;color:#8793a7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.provider-foot{border-top:1px solid #293241;margin-top:12px;padding-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:9px;color:#8290a5}.provider-buttons{margin-left:auto;display:flex;gap:6px}.provider-buttons .el-button{font-size:10px}.models,.usage{min-width:0}.ml-8{margin-left:8px}.subtext{font-size:9px;color:#79869a;margin-top:4px}.muted{color:#748197;font-size:10px}.form-cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}.form-cols .el-input-number{width:100%}.chat-model-label{font-size:11px;color:#8f9ab0;margin-bottom:12px}.chat-messages{height:310px;overflow:auto;border:1px solid #2b3545;border-radius:10px;background:#0e1420;padding:14px}.chat-line{display:flex;gap:10px;margin-bottom:13px;align-items:flex-start}.chat-line.user{flex-direction:row-reverse}.chat-role{width:26px;height:26px;flex:none;border-radius:8px;display:grid;place-items:center;background:#30284e;color:#b6a5ff;font-size:10px}.chat-line.user .chat-role{background:#21364a;color:#71c8e6}.chat-bubble{max-width:80%;padding:9px 12px;border-radius:4px 10px 10px 10px;background:#1b2331;color:#dce3ef;font-size:11px;line-height:1.65;white-space:pre-wrap;word-break:break-word}.chat-line.user .chat-bubble{border-radius:10px 4px 10px 10px;background:#292442}.chat-bubble.typing{color:#91a0b8}.chat-entry{display:flex;gap:9px;margin-top:10px;align-items:flex-end}.chat-entry .el-input{flex:1}.pagination-wrap{display:flex;justify-content:space-between;align-items:center;padding-top:12px;color:#8390a4;font-size:10px}.page-heading{margin-bottom:20px}
+.playground-container{display:grid;grid-template-columns:320px 1fr;gap:18px;min-height:520px}
+.playground-sidebar{background:#111824;border:1px solid #283344;border-radius:10px;padding:16px}
+.playground-sidebar h4{margin:0 0 14px;font-size:12px;color:#d5dfef}
+.pg-presets{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 14px}
+.pointer-tag{cursor:pointer;transition:all .15s}
+.pointer-tag:hover{border-color:#5c78ff;color:#92a4ff}
+.playground-chat{display:flex;flex-direction:column;gap:12px}
+.pg-messages{flex:1;height:420px}
+.bubble-meta{margin-top:6px;font-size:9px;color:#7a8a9f;border-top:1px dashed #2f3a4b;padding-top:4px}
+@media(max-width:800px){.playground-container{grid-template-columns:1fr}.pg-messages{height:320px}}
+@media(max-width:1000px){.ai-layout{grid-template-columns:1fr}.providers{grid-row:auto}.provider-card{max-width:100%}}@media(max-width:650px){.form-cols{grid-template-columns:1fr;gap:0}.models .el-table{min-width:760px}.models{overflow:auto}.provider-foot{gap:6px}.page-heading .el-button{font-size:11px}}</style>

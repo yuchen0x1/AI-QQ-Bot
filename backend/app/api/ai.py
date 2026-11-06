@@ -272,7 +272,14 @@ async def chat(payload: ChatRequest, db: AsyncSession = Depends(get_db), _: User
     if not messages:
         raise HTTPException(status_code=400, detail="请提供 messages")
     result, error, used = await ai_service.chat_once(
-        db, model, messages, system=payload.system_prompt, account_id=payload.account_id, group_number=payload.group_number
+        db,
+        model,
+        messages,
+        system=payload.system_prompt,
+        account_id=payload.account_id,
+        group_number=payload.group_number,
+        temperature=payload.temperature,
+        max_tokens=payload.max_tokens,
     )
     if not result:
         return ChatResponse(ok=False, content="", error=error, model_name=used.model_name)

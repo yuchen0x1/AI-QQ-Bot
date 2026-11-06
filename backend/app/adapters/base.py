@@ -133,10 +133,24 @@ class QQAdapter(abc.ABC):
 
     # ---------------- 消息 ----------------
     @abc.abstractmethod
-    async def send_private_message(self, user_id: int, message: str) -> dict[str, Any]: ...
+    async def send_private_message(
+        self,
+        user_id: int,
+        message: str,
+        *,
+        markdown: dict[str, Any] | None = None,
+        keyboard: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
 
     @abc.abstractmethod
-    async def send_group_message(self, group_id: int, message: str) -> dict[str, Any]: ...
+    async def send_group_message(
+        self,
+        group_id: int,
+        message: str,
+        *,
+        markdown: dict[str, Any] | None = None,
+        keyboard: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
 
     # ---------------- 群管理 ----------------
     @abc.abstractmethod

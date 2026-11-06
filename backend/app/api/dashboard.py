@@ -109,6 +109,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(requir
                 "nickname": account.nickname,
                 "state": state.state if state else "stopped",
                 "protocol": account.protocol,
+                "app_id": account.app_id,
                 "online_seconds": state.online_seconds if state else 0,
                 "last_error": (account.connection.last_error if account.connection else None),
             }

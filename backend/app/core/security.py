@@ -31,11 +31,24 @@ def verify_password(password: str, hashed: str) -> bool:
 # --------------------------------------------------------------------------
 # JWT
 # --------------------------------------------------------------------------
-def create_access_token(subject: str, extra: dict[str, Any] | None = None, expires_minutes: int | None = None) -> str:
+def password_stamp(password_hash: str) -> str:
+    """由密码哈希派生的版本标记：密码变更后旧 JWT 立即失效，且不可逆推出密码。"""
+    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:16]
+
+
+def create_access_token(
+    subject: str,
+    extra: dict[str, Any] | None = None,
+    expires_minutes: int | None = None,
+    *,
+    password_hash: str | None = None,
+) -> str:
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=expires_minutes or settings.access_token_expire_minutes
     )
     payload: dict[str, Any] = {"sub": subject, "exp": expire, "iat": datetime.now(timezone.utc)}
+    if password_hash:
+        payload["pwd_v"] = password_stamp(password_hash)
     if extra:
         payload.update(extra)
     return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
@@ -46,6 +59,11 @@ def decode_access_token(token: str) -> dict[str, Any] | None:
         return jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
     except jwt.PyJWTError:
         return None
+
+
+def token_matches_user(payload: dict[str, Any], password_hash: str) -> bool:
+    """校验 JWT 中的密码版本标记；缺失或 mismatch 一律视为失效。"""
+    return payload.get("pwd_v") == password_stamp(password_hash)
 
 
 # --------------------------------------------------------------------------

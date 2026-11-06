@@ -262,10 +262,24 @@ class OneBot11Adapter(QQAdapter):
     async def get_group_member_list(self, group_id: int) -> list[dict[str, Any]]:
         return list((await self.call_api("get_group_member_list", {"group_id": group_id})).get("data") or [])
 
-    async def send_private_message(self, user_id: int, message: str) -> dict[str, Any]:
+    async def send_private_message(
+        self,
+        user_id: int,
+        message: str,
+        *,
+        markdown: dict[str, Any] | None = None,
+        keyboard: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         return await self.call_api("send_private_msg", {"user_id": user_id, "message": message})
 
-    async def send_group_message(self, group_id: int, message: str) -> dict[str, Any]:
+    async def send_group_message(
+        self,
+        group_id: int,
+        message: str,
+        *,
+        markdown: dict[str, Any] | None = None,
+        keyboard: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         return await self.call_api("send_group_msg", {"group_id": group_id, "message": message})
 
     async def set_group_ban(self, group_id: int, user_id: int, duration: int = 600) -> dict[str, Any]:

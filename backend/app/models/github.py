@@ -34,6 +34,9 @@ class GithubRepository(Base, TimestampMixin):
     language: Mapped[str | None] = mapped_column(String(64))
     stars: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     forks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 仓库归属：由谁通过网页/OAuth 添加；为空表示历史数据或全局共享仓库。
+    # SQLite 不支持 ALTER TABLE 追加外键，这里用软引用 + 应用层清空（删除用户时置空）。
+    owner_user_id: Mapped[int | None] = mapped_column(Integer, index=True)
     token_enc: Mapped[str | None] = mapped_column(Text)
     webhook_secret_enc: Mapped[str | None] = mapped_column(Text)
     monitor_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -135,3 +138,27 @@ class PushRecord(Base, TimestampMixin):
     retries: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     message_id: Mapped[int | None] = mapped_column(BigInteger)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserGithubToken(Base, TimestampMixin):
+    """平台用户绑定的 GitHub OAuth 授权：一个平台用户对应一个 GitHub 账号。
+
+    Token 只在服务端加密存储，任何 API 都不会回显明文；页面只展示登录名与头像。
+    """
+
+    __tablename__ = "user_github_tokens"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_user_github_token_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    github_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    login: Mapped[str] = mapped_column(String(190), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(190))
+    avatar_url: Mapped[str | None] = mapped_column(String(400))
+    email: Mapped[str | None] = mapped_column(String(190))
+    scopes: Mapped[str] = mapped_column(String(400), default="", nullable=False)
+    token_type: Mapped[str] = mapped_column(String(32), default="bearer", nullable=False)
+    access_token_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -10,9 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import decrypt_secret
 from app.models import GithubEvent, GithubRelease, GithubRepository
 from app.services.github.client import GithubClient, GithubError
+from app.services.github.oauth import resolve_repo_token
 from app.services.github.provider import build_repository_provider
 from app.services.github.notify import dispatch_release
 from app.services.logs import write_log
@@ -199,7 +199,7 @@ async def sync_releases(
 async def check_repository(
     db: AsyncSession, repo: GithubRepository, *, notify: bool = True, client: GithubClient | None = None
 ) -> dict[str, Any]:
-    client = client or build_repository_provider(repo.provider, decrypt_secret(repo.token_enc))
+    client = client or build_repository_provider(repo.provider, await resolve_repo_token(db, repo))
     result: dict[str, Any] = {
         "repository_id": repo.id,
         "repository": repo.full_name,
@@ -278,7 +278,7 @@ async def import_repository_releases(
     db: AsyncSession, repo: GithubRepository, client: GithubClient | None = None
 ) -> int:
     """添加仓库时导入历史版本，避免把旧版本当成新版本推送。"""
-    client = client or build_repository_provider(repo.provider, decrypt_secret(repo.token_enc))
+    client = client or build_repository_provider(repo.provider, await resolve_repo_token(db, repo))
     releases = await sync_releases(db, repo, client, notify=False, mark_notified=True)
     return len(releases)
 

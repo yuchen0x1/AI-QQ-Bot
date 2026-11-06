@@ -1,7 +1,7 @@
 Migration setup
 ===============
 
-The initial revision creates the SQLAlchemy metadata for a fresh database. For production deployments, run migrations with the same DATABASE_URL used by the application:
+Revisions are the single source of truth for schema. The initial revision is an explicit DDL snapshot; the application no longer creates tables from model metadata at startup. On startup the app runs `upgrade head` and then writes idempotent seed data. For production deployments, run migrations with the same DATABASE_URL used by the application:
 
   alembic upgrade head
 
@@ -9,4 +9,4 @@ When changing model definitions, generate and review a new migration before appl
 
   alembic revision --autogenerate -m "describe change"
 
-The application startup still creates missing tables as a convenience for development and new installations. It does not alter existing tables; use Alembic for schema changes.
+A database without `alembic_version`, or with a revision outside this chain, is rejected at startup. Back up and verify the schema first; if it matches head, run `alembic stamp head`.

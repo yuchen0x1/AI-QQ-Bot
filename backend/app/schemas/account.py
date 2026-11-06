@@ -9,16 +9,27 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.common import ORMModel
 
+# QQ 官方机器人默认只订阅群聊 @ / 单聊 / 好友与群变动事件（GROUP_AND_C2C_EVENT）。
+DEFAULT_OFFICIAL_INTENTS = 1 << 25
+OFFICIAL_PROTOCOL = "qq_official"
+
 
 class AccountBase(BaseModel):
     name: str = Field(min_length=1, max_length=96)
     qq_number: int | None = None
     nickname: str | None = None
-    protocol: Literal["onebot11", "mock"] = "onebot11"
-    connection_mode: Literal["ws_client", "ws_server", "http"] = "ws_client"
+    protocol: Literal["onebot11", "qq_official", "mock"] = "qq_official"
+    connection_mode: Literal["ws_client", "ws_server", "http", "official_ws", "official_webhook"] = "official_ws"
     api_base: str | None = None
     ws_url: str | None = None
     access_token: str | None = None
+    # ---- QQ 官方机器人开放平台（bot.qq.com）----
+    app_id: str | None = Field(default=None, max_length=64)
+    app_secret: str | None = None
+    official_sandbox: bool = False
+    official_intents: int = Field(default=DEFAULT_OFFICIAL_INTENTS, ge=0, le=(1 << 31) - 1)
+    official_allow_proactive: bool = True
+    official_api_base: str | None = None
     enabled: bool = True
     auto_start: bool = False
     auto_reconnect: bool = True
@@ -26,7 +37,7 @@ class AccountBase(BaseModel):
     reconnect_max_seconds: int = Field(default=300, ge=5, le=3600)
     remark: str | None = None
 
-    @field_validator("api_base", "ws_url")
+    @field_validator("api_base", "ws_url", "app_id", "official_api_base")
     @classmethod
     def _strip(cls, value: str | None) -> str | None:
         return value.strip() if value else value
@@ -40,11 +51,17 @@ class AccountUpdate(BaseModel):
     name: str | None = None
     qq_number: int | None = None
     nickname: str | None = None
-    protocol: Literal["onebot11", "mock"] | None = None
-    connection_mode: Literal["ws_client", "ws_server", "http"] | None = None
+    protocol: Literal["onebot11", "qq_official", "mock"] | None = None
+    connection_mode: Literal["ws_client", "ws_server", "http", "official_ws", "official_webhook"] | None = None
     api_base: str | None = None
     ws_url: str | None = None
     access_token: str | None = None
+    app_id: str | None = Field(default=None, max_length=64)
+    app_secret: str | None = None
+    official_sandbox: bool | None = None
+    official_intents: int | None = Field(default=None, ge=0, le=(1 << 31) - 1)
+    official_allow_proactive: bool | None = None
+    official_api_base: str | None = None
     enabled: bool | None = None
     auto_start: bool | None = None
     auto_reconnect: bool | None = None
@@ -76,13 +93,21 @@ class AccountOut(ORMModel):
     api_base: str | None = None
     ws_url: str | None = None
     self_id: int | None = None
+    app_id: str | None = None
+    bot_openid: str | None = None
+    webhook_url: str | None = None
+    has_token: bool = False
+    has_secret: bool = False
+    official_sandbox: bool = False
+    official_intents: int = DEFAULT_OFFICIAL_INTENTS
+    official_allow_proactive: bool = True
+    official_api_base: str | None = None
     enabled: bool
     auto_start: bool
     auto_reconnect: bool
     remark: str | None = None
     created_at: datetime
     connection: ConnectionOut | None = None
-    has_token: bool = False
     online_seconds: int = 0
     group_count: int = 0
     capabilities: dict[str, bool] = {}

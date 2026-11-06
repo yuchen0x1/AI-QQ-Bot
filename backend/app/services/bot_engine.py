@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -11,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import AdapterError, AdapterEvent, QQAdapter, UnsupportedAction
+from app.core.config import settings as app_settings
+from app.db.session import SessionLocal
 from app.models import (
     Account,
     BotRequest,
@@ -32,6 +35,119 @@ MAX_REPLY_CHARS = 1200
 
 
 class BotEngine:
+    """消息处理入口。
+
+    AI 回复是整条链路里唯一的高延迟环节（上游模型通常 3~60 秒），因此它被放进
+    后台任务执行：消息落库、自动管理、命令响应仍然在事件流里同步完成，保证顺序和
+    即时性；只有 AI 生成被移到独立任务，并按账号限流、按会话串行。
+    这样一条慢请求不会阻塞同账号其他群/私聊的消息处理。
+    """
+
+    def __init__(self) -> None:
+        self._ai_tasks: set[asyncio.Task[None]] = set()
+        # account_id -> (并发上限, 信号量)；上限调整后自动重建。
+        self._ai_limits: dict[int, tuple[int, asyncio.Semaphore]] = {}
+        # (account_id, scope, target) -> 会话锁，保证同一群/私聊内的消息按到达顺序处理。
+        self._session_locks: dict[tuple[int, str, int], asyncio.Lock] = {}
+
+    # ------------------------------------------------------------------
+    def _ai_semaphore(self, account_db_id: int) -> asyncio.Semaphore:
+        limit = max(1, int(app_settings.ai_max_concurrency))
+        current = self._ai_limits.get(account_db_id)
+        if current and current[0] == limit:
+            return current[1]
+        semaphore = asyncio.Semaphore(limit)
+        self._ai_limits[account_db_id] = (limit, semaphore)
+        return semaphore
+
+    def _session_lock(self, account_db_id: int, event: AdapterEvent) -> asyncio.Lock:
+        scope = "private" if event.message_type == "private" else "group"
+        target = int(event.user_id or 0) if scope == "private" else int(event.group_id or 0)
+        key = (account_db_id, scope, target)
+        lock = self._session_locks.get(key)
+        if lock is None:
+            if len(self._session_locks) > 2000:
+                # 只回收当前无人持有的锁；等待中的锁 locked() 为 True，不会被误删。
+                for stale in [item for item, value in self._session_locks.items() if not value.locked()][:500]:
+                    self._session_locks.pop(stale, None)
+            lock = asyncio.Lock()
+            self._session_locks[key] = lock
+        return lock
+
+    def schedule_ai_reply(
+        self,
+        account_db_id: int,
+        adapter: QQAdapter,
+        event: AdapterEvent,
+        text: str,
+        *,
+        forced: bool = False,
+    ) -> None:
+        """把 AI 回复排到后台；调用方立即返回，事件流继续消费下一条消息。"""
+        task = asyncio.create_task(
+            self._ai_reply_task(account_db_id, adapter, event, text, forced=forced),
+            name=f"qbot-ai-{account_db_id}",
+        )
+        self._ai_tasks.add(task)
+        task.add_done_callback(self._ai_tasks.discard)
+
+    async def _ai_reply_task(
+        self,
+        account_db_id: int,
+        adapter: QQAdapter,
+        event: AdapterEvent,
+        text: str,
+        *,
+        forced: bool = False,
+    ) -> None:
+        lock = self._session_lock(account_db_id, event)
+        semaphore = self._ai_semaphore(account_db_id)
+        try:
+            # 先锁会话再占并发，避免同一会话的多条消息白占并发名额。
+            async with lock, semaphore:
+                async with SessionLocal() as db:
+                    account = await db.get(Account, account_db_id)
+                    if not account or not account.enabled:
+                        return
+                    group: Group | None = None
+                    group_settings: GroupSettings | None = None
+                    if event.message_type == "group" and event.group_id:
+                        group = await db.scalar(
+                            select(Group).where(
+                                Group.account_id == account.id,
+                                Group.group_number == event.group_id,
+                            )
+                        )
+                        if group:
+                            group_settings = await db.scalar(
+                                select(GroupSettings).where(GroupSettings.group_id == group.id)
+                            )
+                    await self._ai_reply(
+                        db,
+                        account,
+                        adapter,
+                        event,
+                        group,
+                        group_settings,
+                        text,
+                        forced=forced,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 后台任务不能静默失败
+            logger.exception("AI 后台回复失败 account=%s: %s", account_db_id, exc)
+            try:
+                async with SessionLocal() as db:
+                    await write_log(
+                        db,
+                        level="ERROR",
+                        category="ai",
+                        message=f"AI 后台回复异常：{type(exc).__name__}: {exc}",
+                        account_id=account_db_id,
+                    )
+            except Exception:  # noqa: BLE001
+                logger.warning("写入 AI 异常日志失败", exc_info=True)
+
     # ------------------------------------------------------------------
     async def handle_event(self, db: AsyncSession, account_db_id: int, adapter: QQAdapter, event: AdapterEvent) -> None:
         account = await db.get(Account, account_db_id)
@@ -199,10 +315,10 @@ class BotEngine:
             await self.send_text(db, account, adapter, command_reply, group_number=event.group_id, user_id=event.user_id)
             return
 
-        # 3) AI
+        # 3) AI：交给后台任务，避免慢模型阻塞同账号后续消息
         should_ai = handled_by_ai or await self._should_reply_with_ai(event, settings)
         if should_ai:
-            await self._ai_reply(db, account, adapter, event, group, settings, text, forced=handled_by_ai)
+            self.schedule_ai_reply(account.id, adapter, event, text, forced=handled_by_ai)
             return
 
         # 4) 插件钩子
@@ -266,7 +382,7 @@ class BotEngine:
                 db,
                 account,
                 adapter,
-                "尚未配置可用的 AI 模型，请管理员在后台「AI 模型中心」添加并测试。",
+                "尚未配置 AI 模型。发送「菜单」查看可用指令；管理员可在后台「AI 模型中心」接入模型后开启智能对话。",
                 group_number=event.group_id,
                 user_id=event.user_id,
             )

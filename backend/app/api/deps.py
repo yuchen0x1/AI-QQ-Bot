@@ -9,7 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, token_matches_user
 from app.db.session import get_db
 from app.models import User
 
@@ -37,6 +37,8 @@ async def get_current_user(
     user = await db.scalar(select(User).where(User.username == payload["sub"]))
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已禁用")
+    if not token_matches_user(payload, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="凭证已失效，请重新登录")
     return user
 
 

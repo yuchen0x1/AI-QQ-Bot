@@ -7,6 +7,7 @@ from app.models.account import (
     GroupMember,
     GroupSettings,
     Message,
+    QQOfficialIdentity,
 )
 from app.models.ai import (
     AIConversation,
@@ -23,6 +24,7 @@ from app.models.github import (
     GithubRepository,
     PushRecord,
     PushRule,
+    UserGithubToken,
 )
 from app.models.task import (
     BotCommand,
@@ -48,6 +50,7 @@ __all__ = [
     "GroupSettings",
     "GroupMember",
     "Message",
+    "QQOfficialIdentity",
     "AIProvider",
     "AIModel",
     "AIConversation",
@@ -58,6 +61,7 @@ __all__ = [
     "GithubEvent",
     "PushRule",
     "PushRecord",
+    "UserGithubToken",
     "ScheduledTask",
     "TaskRecord",
     "Plugin",

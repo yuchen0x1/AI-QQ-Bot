@@ -134,6 +134,8 @@ class ChatRequest(BaseModel):
     system_prompt: str | None = None
     account_id: int | None = None
     group_number: int | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_tokens: int | None = Field(default=None, ge=16, le=200000)
 
 
 class ChatResponse(BaseModel):

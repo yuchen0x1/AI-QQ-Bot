@@ -25,7 +25,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a '$$REDIS_PASSWORD' ping | grep -q PONG"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -33,6 +33,8 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
     networks: [qbot_internal]
 
+  # Legacy OneBot v11 bridge. QQ 官方机器人接入不需要此服务；
+  # 仅在显式启用 --profile napcat 时启动，WebUI 不映射公网端口。
   napcat-1:
     image: mlikiowa/napcat-docker:v4.18.28
     restart: unless-stopped

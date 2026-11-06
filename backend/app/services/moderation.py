@@ -29,15 +29,29 @@ class ModerationVerdict:
 
 
 class RateTracker:
-    """进程内滑动窗口频率统计（按 账号:群:用户）。"""
+    """进程内滑动窗口频率统计（按 账号:群:用户）。
+
+    key 会随活跃用户数增长，必须定期回收，否则长期运行后字典只增不减。
+    """
+
+    SWEEP_EVERY = 1000
+    MAX_SWEEP = 500
 
     def __init__(self, window: int = 60) -> None:
         self.window = window
+        # 重复内容检测窗口是 120 秒，key 的存活时间取两者较大值的两倍。
+        self._ttl = max(window, 120) * 2
         self._hits: dict[str, deque[float]] = defaultdict(deque)
         self._recent: dict[str, deque[tuple[float, str]]] = defaultdict(lambda: deque(maxlen=10))
+        self._ops = 0
 
     def hit(self, key: str, content: str) -> tuple[int, int]:
         now = time.monotonic()
+        self._ops += 1
+        if self._ops >= self.SWEEP_EVERY:
+            self._ops = 0
+            self._sweep(now)
+
         bucket = self._hits[key]
         bucket.append(now)
         while bucket and now - bucket[0] > self.window:
@@ -53,6 +67,27 @@ class RateTracker:
             else:
                 break
         return len(bucket), repeat
+
+    def _sweep(self, now: float) -> None:
+        """回收长时间没有活动的 key；单次有上限，剩余留到下次。"""
+        removed = 0
+        for key in list(self._hits):
+            bucket = self._hits.get(key)
+            if not bucket or now - bucket[-1] > self._ttl:
+                self._hits.pop(key, None)
+                self._recent.pop(key, None)
+                removed += 1
+                if removed >= self.MAX_SWEEP:
+                    break
+        # _recent 里可能存在没有对应 _hits 的 key（例如命中黑名单后提前返回）。
+        extra = 0
+        for key in list(self._recent):
+            recent = self._recent.get(key)
+            if not recent or now - recent[-1][0] > self._ttl:
+                self._recent.pop(key, None)
+                extra += 1
+                if extra >= self.MAX_SWEEP:
+                    break
 
     def reset(self, key: str) -> None:
         self._hits.pop(key, None)

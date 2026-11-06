@@ -41,6 +41,8 @@ def upgrade() -> None:
     indexes = {idx["name"] for idx in sa.inspect(bind).get_indexes("account_connections")}
     if "ix_account_connections_lease_owner" not in indexes:
         op.create_index("ix_account_connections_lease_owner", "account_connections", ["lease_owner"])
+    if "ix_account_connections_lease_id" not in indexes:
+        op.create_index("ix_account_connections_lease_id", "account_connections", ["lease_id"], unique=True)
     if "ix_account_connections_lease_expires_at" not in indexes:
         op.create_index("ix_account_connections_lease_expires_at", "account_connections", ["lease_expires_at"])
     task_indexes = {idx["name"] for idx in sa.inspect(bind).get_indexes("scheduled_tasks")}
@@ -65,6 +67,8 @@ def downgrade() -> None:
     account_indexes = {idx["name"] for idx in inspector.get_indexes("account_connections")}
     if "ix_account_connections_lease_expires_at" in account_indexes:
         op.drop_index("ix_account_connections_lease_expires_at", table_name="account_connections")
+    if "ix_account_connections_lease_id" in account_indexes:
+        op.drop_index("ix_account_connections_lease_id", table_name="account_connections")
     if "ix_account_connections_lease_owner" in account_indexes:
         op.drop_index("ix_account_connections_lease_owner", table_name="account_connections")
     account_columns = {col["name"] for col in inspector.get_columns("account_connections")}

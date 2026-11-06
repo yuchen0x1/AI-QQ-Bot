@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 
@@ -29,10 +30,11 @@ async def _load_account(account_uid: str) -> Account | None:
 
 
 def _check_token(account: Account, token: str | None) -> bool:
+    """Fail-closed：未配置 Token 或密文无法解密时一律拒绝接入。"""
     expected = decrypt_secret(account.access_token_enc)
-    if not expected:
-        return True
-    return token == expected
+    if not expected or not token:
+        return False
+    return hmac.compare_digest(token, expected)
 
 
 @router.websocket("/ws/{account_uid}")

@@ -131,21 +131,51 @@ class MockAdapter(QQAdapter):
         self._check()
         return list(self.members.get(group_id, []))
 
-    async def send_private_message(self, user_id: int, message: str) -> dict[str, Any]:
+    async def send_private_message(
+        self,
+        user_id: int,
+        message: str,
+        *,
+        markdown: dict[str, Any] | None = None,
+        keyboard: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         self._check()
         message_id = next(self._msg_seq)
         self.outbox.append(
-            {"type": "private", "target": user_id, "message": message, "message_id": message_id, "at": datetime.utcnow()}
+            {
+                "type": "private",
+                "target": user_id,
+                "message": message,
+                "markdown": markdown,
+                "keyboard": keyboard,
+                "message_id": message_id,
+                "at": datetime.utcnow(),
+            }
         )
         return self._ok(message_id=message_id)
 
-    async def send_group_message(self, group_id: int, message: str) -> dict[str, Any]:
+    async def send_group_message(
+        self,
+        group_id: int,
+        message: str,
+        *,
+        markdown: dict[str, Any] | None = None,
+        keyboard: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         self._check()
         if group_id not in self.groups:
             raise AdapterError(f"群 {group_id} 不存在，无法发送消息")
         message_id = next(self._msg_seq)
         self.outbox.append(
-            {"type": "group", "target": group_id, "message": message, "message_id": message_id, "at": datetime.utcnow()}
+            {
+                "type": "group",
+                "target": group_id,
+                "message": message,
+                "markdown": markdown,
+                "keyboard": keyboard,
+                "message_id": message_id,
+                "at": datetime.utcnow(),
+            }
         )
         return self._ok(message_id=message_id)
 

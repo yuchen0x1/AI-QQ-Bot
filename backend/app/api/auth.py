@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import client_ip, get_current_user, require
@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.core.ratelimit import login_limiter
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.session import get_db
-from app.models import AuditLog, LoginAttempt, Role, User
+from app.models import AuditLog, GithubRepository, LoginAttempt, Role, User
 from app.schemas.auth import (
     AuditLogOut,
     LoginRequest,
@@ -70,7 +70,11 @@ async def login(payload: LoginRequest, request: Request, response: Response, db:
     await db.commit()
     await db.refresh(user)
 
-    token = create_access_token(user.username, {"role": user.role.name if user.role else "viewer"})
+    token = create_access_token(
+        user.username,
+        {"role": user.role.name if user.role else "viewer"},
+        password_hash=user.password_hash,
+    )
     response.set_cookie(
         "qbot_token",
         token,
@@ -100,12 +104,26 @@ async def me(user: User = Depends(get_current_user)):
 
 @router.post("/auth/password", response_model=MessageOut)
 async def change_password(
-    payload: PasswordChange, request: Request, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+    payload: PasswordChange, request: Request, response: Response, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ):
     if not verify_password(payload.old_password, user.password_hash):
         raise HTTPException(status_code=400, detail="原密码不正确")
     user.password_hash = hash_password(payload.new_password)
     await db.commit()
+    # 签发包含最新密码 hash 的新 token 写回 Cookie，确保当前会话平滑过渡同时作废其它会话
+    new_token = create_access_token(
+        user.username,
+        {"role": user.role.name if user.role else "viewer"},
+        password_hash=user.password_hash,
+    )
+    response.set_cookie(
+        "qbot_token",
+        new_token,
+        httponly=True,
+        samesite="lax",
+        secure=settings.is_production,
+        max_age=settings.access_token_expire_minutes * 60,
+    )
     await audit(db, user_id=user.id, username=user.username, action="change_password", ip=client_ip(request))
     return MessageOut(detail="密码已更新")
 
@@ -196,6 +214,10 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="用户不存在")
     if user.id == current.id:
         raise HTTPException(status_code=400, detail="不能删除当前登录账号")
+    # 仓库归属为软引用：删除用户时把其名下仓库转为全局仓库，避免留下悬空 ID。
+    await db.execute(
+        update(GithubRepository).where(GithubRepository.owner_user_id == user.id).values(owner_user_id=None)
+    )
     await db.delete(user)
     await db.commit()
     await audit(db, user_id=current.id, username=current.username, action="delete_user", target=str(user_id), ip=client_ip(request))

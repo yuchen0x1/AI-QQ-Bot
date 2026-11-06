@@ -8,8 +8,10 @@ import socket
 from functools import lru_cache
 from pathlib import Path
 
+from typing import Annotated
+
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent  # backend/
 BASE_DIR = BACKEND_DIR.parent  # 项目根目录
@@ -45,6 +47,14 @@ class Settings(BaseSettings):
     napcat_ws_url: str | None = None
     napcat_access_token: str | None = None
 
+    # ---------- QQ 官方机器人开放平台 ----------
+    # 凭据存放于账号表（加密），这里只配置平台域名，便于私有化/网关环境覆盖。
+    qqbot_token_url: str = "https://bots.qq.com/app/getAppAccessToken"
+    qqbot_openapi_base: str = "https://api.bot.qq.com"
+    qqbot_sandbox_openapi_base: str = "https://sandbox.api.sgroup.qq.com"
+    # Webhook 事件推送允许的时间戳偏差（秒）；0 表示只验签名不校验新鲜度。
+    qqbot_webhook_max_age_seconds: int = 300
+
     # ---------- 安全 ----------
     secret_key: str = "change-me-in-production-please-use-a-long-random-string"
     access_token_expire_minutes: int = 720
@@ -52,7 +62,7 @@ class Settings(BaseSettings):
     login_max_attempts: int = 5
     login_lock_minutes: int = 15
     rate_limit_per_minute: int = 240
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:8080"]
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173", "http://localhost:8080"]
 
     # ---------- 初始管理员（仅首次初始化使用） ----------
     admin_username: str = "admin"
@@ -74,12 +84,23 @@ class Settings(BaseSettings):
     account_lease_seconds: int = 45
     account_lease_renew_seconds: int = 15
 
+    # ---------- AI 运行时 ----------
+    # 单个账号同时在途的 AI 请求上限：防止慢模型拖垮事件循环，也避免触发上游限流。
+    # 同一群/同一私聊会话仍按顺序处理，只有不同会话之间才并发。
+    ai_max_concurrency: int = 4
+
     # ---------- 调度 / 通知 ----------
     scheduler_enabled: bool = True
     scheduler_timezone: str = "Asia/Shanghai"
     github_api_base: str = "https://api.github.com"
     github_token: str | None = None
     github_poll_default_seconds: int = 900
+    # GitHub OAuth App：可在网页端「GitHub → OAuth 配置」写入数据库（优先），也可用环境变量提供。
+    github_oauth_client_id: str | None = None
+    github_oauth_client_secret: str | None = None
+    github_oauth_scopes: str = "read:user repo"
+    # 留空则使用 PUBLIC_BASE_URL + /api/github/oauth/callback；反向代理或本地开发时可显式指定。
+    github_oauth_redirect_uri: str | None = None
     push_max_retries: int = 3
     backup_dir: str = str(BASE_DIR / "backups")
     data_dir: str = str(BASE_DIR / "data")

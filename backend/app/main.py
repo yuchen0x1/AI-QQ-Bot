@@ -11,10 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.api.qqbot_webhook import legacy_router as qqbot_webhook_legacy_router
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import setup_logging
-from app.core.ratelimit import api_limiter
+from app.core.ratelimit import api_limiter, legacy_webhook_limiter
 from app.db.init_db import init_database
 from app.db.session import SessionLocal
 from app.services.account_manager import account_manager
@@ -71,11 +72,34 @@ app.add_middleware(
 )
 
 
+def _path_matches(path: str, prefix: str) -> bool:
+    """按路径段匹配，避免 /api/webhook 误豁免 /api/webhook-foo。"""
+    return path == prefix or path.startswith(prefix + "/")
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if path.startswith(settings.api_prefix) and not path.startswith(f"{settings.api_prefix}/webhook"):
-            client = request.client.host if request.client else "unknown"
+        client = request.client.host if request.client else "unknown"
+        # 平台 Webhook 回调不受登录态限流约束：GitHub 与 QQ 官方机器人回调都由签名校验保护。
+        callback_paths = (
+            f"{settings.api_prefix}/webhook",
+            f"{settings.api_prefix}/qqbot/webhook",
+        )
+        # 旧版根路径 /webhook（兼容把回调地址填成 https://域名/webhook）不在 API 前缀下，
+        # 必须单独限流，否则任何人都能无限 POST 触发 JSON 解析和账号查询。
+        is_legacy_callback = path == "/webhook" or path.startswith("/webhook/")
+        if is_legacy_callback:
+            allowed, retry_after = legacy_webhook_limiter.allow(client)
+            if not allowed:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": f"请求过于频繁，请 {retry_after} 秒后重试"},
+                    headers={"Retry-After": str(retry_after)},
+                )
+        elif path.startswith(settings.api_prefix) and not any(
+            _path_matches(path, item) for item in callback_paths
+        ):
             allowed, retry_after = api_limiter.allow(client)
             if not allowed:
                 return JSONResponse(
@@ -111,6 +135,8 @@ async def unhandled_exception(request: Request, exc: Exception):
 
 
 app.include_router(api_router, prefix=settings.api_prefix)
+# 兼容把开放平台回调地址填成 https://域名/webhook 的部署方式。
+app.include_router(qqbot_webhook_legacy_router)
 
 
 @app.get("/")

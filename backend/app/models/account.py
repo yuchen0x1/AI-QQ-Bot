@@ -19,8 +19,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, utcnow
 
-PROTOCOLS = ("onebot11", "mock")
-CONNECTION_MODES = ("ws_client", "ws_server", "http")
+PROTOCOLS = ("onebot11", "qq_official", "mock")
+CONNECTION_MODES = ("ws_client", "ws_server", "http", "official_ws", "official_webhook")
 
 
 class Account(Base, TimestampMixin):
@@ -37,6 +37,10 @@ class Account(Base, TimestampMixin):
     api_base: Mapped[str | None] = mapped_column(String(255))
     ws_url: Mapped[str | None] = mapped_column(String(255))
     access_token_enc: Mapped[str | None] = mapped_column(Text)
+    # QQ 官方机器人开放平台（bot.qq.com）凭据。AppID 非敏感，AppSecret 必须加密存储。
+    app_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    app_secret_enc: Mapped[str | None] = mapped_column(Text)
+    bot_openid: Mapped[str | None] = mapped_column(String(190))
     self_id: Mapped[int | None] = mapped_column(BigInteger)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     auto_start: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -158,3 +162,33 @@ class Message(Base):
     blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     block_reason: Mapped[str | None] = mapped_column(String(190))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True, nullable=False)
+
+
+class QQOfficialIdentity(Base, TimestampMixin):
+    """QQ 官方机器人 OpenID → 平台内部稳定整数 ID 映射。
+
+    官方平台只提供字符串 OpenID（group_openid / user_openid / member_openid），
+    而本平台历史数据模型统一使用整数 QQ 号 / 群号。这张表负责把两者双向映射，
+    使 BotEngine、群管理、AI 会话、消息统计等上层逻辑无需感知 OpenID。
+
+    kind:
+      group  = 群 OpenID（发送群消息使用）
+      user   = 单聊用户 OpenID（发送私聊消息使用）
+      member = 群成员 OpenID（群内身份，和 user 不互通）
+    scope:  member 所属群的 OpenID，用于按群查询成员；其它 kind 为空字符串。
+    """
+
+    __tablename__ = "qq_official_identities"
+    __table_args__ = (
+        UniqueConstraint("account_id", "kind", "scope", "openid", name="uq_qq_identity_account_kind_openid"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    scope: Mapped[str] = mapped_column(String(190), default="", server_default="", nullable=False)
+    openid: Mapped[str] = mapped_column(String(190), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(190))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
