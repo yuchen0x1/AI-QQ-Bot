@@ -62,7 +62,7 @@ const config = {
   kicker: 'QQ BOT FLEET',
   title: 'QQ 账号管理',
   description: '默认使用 QQ 开放平台官方机器人：填 AppID + AppSecret 即可接入，无需扫码登录个人 QQ 号，不触发登录风控。回调方式二选一：WebSocket（推荐，只需出站连接）或 Webhook（需公网 HTTPS 地址 /api/qqbot/webhook/{AppID}，平台会先发起地址验证）。Webhook 模式下「在线」表示本地已就绪，仍需平台验证通过才会推送事件。请订阅「群聊 @ 消息 / 单聊消息」并配置 IP 白名单；旧版 NapCat / OneBot 保留为兼容选项。',
-  endpoint: '/accounts', paged: false, keyword: null, itemName: '账号', nameKey: 'name', actionWidth: 230,
+  endpoint: '/accounts', paged: false, keyword: null, itemName: '账号', nameKey: 'name', actionWidth: 310,
   columns: [
     { key: 'name', label: '账号名称', width: 140 },
     { key: 'app_id', label: 'AppID', width: 120 },

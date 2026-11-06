@@ -118,7 +118,10 @@ def redirect_uri() -> str:
     configured = (settings.github_oauth_redirect_uri or "").strip()
     if configured:
         return configured
-    return f"{settings.public_base_url.rstrip('/')}/api/github/oauth/callback"
+    # 默认指向前端站点（经 Nginx/Vite 同域代理 /api），回调后 302 /github 才能落回控制台页面；
+    # 只有当前端与后端不同域时才需要显式配置 GITHUB_OAUTH_REDIRECT_URI。
+    base = (settings.frontend_base_url or settings.public_base_url).rstrip("/")
+    return f"{base}/api/github/oauth/callback"
 
 
 # ---------------------------------------------------------------------------

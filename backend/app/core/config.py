@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     debug: bool = False
     api_prefix: str = "/api"
     public_base_url: str = "http://localhost:8000"
+    # 前端站点地址（OAuth 回调 302 回跳用）；留空则回退 public_base_url。
+    # 本地开发指到 Vite(5174) 时，GitHub 回调经前端代理进后端，302 /github 不会 404。
+    frontend_base_url: str = ""
 
     # ---------- NapCat 扫码登录 ----------
     # 可用 NAPCAT_INSTANCES_JSON 配置多个独立 NapCat 实例；单实例也可使用下面的字段。

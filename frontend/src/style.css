@@ -31,8 +31,14 @@
   --el-color-primary-dark-2: #7058eb;
   --el-bg-color: #0f1523;
   --el-bg-color-overlay: #131a2b;
+  --el-bg-color-page: #060910;
   --el-fill-color-blank: #0a0e18;
+  --el-fill-color: #1a2336;
   --el-fill-color-light: #161e30;
+  --el-fill-color-lighter: #131a2b;
+  --el-fill-color-extra-light: #101725;
+  --el-fill-color-dark: #1c2538;
+  --el-fill-color-darker: #141b2c;
   --el-border-color: rgba(56, 75, 110, 0.4);
   --el-border-color-light: rgba(56, 75, 110, 0.25);
   --el-text-color-primary: #edf2fc;
@@ -545,7 +551,19 @@ body {
   --el-table-border-color: rgba(45, 62, 92, 0.45) !important;
   --el-table-text-color: #cbd8ec !important;
   --el-table-header-text-color: #9cb0ce !important;
+  /* 斑马纹隔行 / 当前行 / 展开行必须走深色，否则会出现白底看不清文字 */
+  --el-fill-color-lighter: rgba(18, 26, 44, 0.6) !important;
+  --el-fill-color: rgba(24, 34, 56, 0.6) !important;
+  --el-fill-color-light: rgba(22, 30, 48, 0.6) !important;
+  --el-table-current-row-bg-color: rgba(30, 42, 68, 0.6) !important;
+  --el-table-expanded-cell-bg-color: rgba(16, 24, 40, 0.6) !important;
   background: transparent !important;
+}
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: rgba(18, 26, 44, 0.6) !important;
+}
+.el-table .el-table__body tr:hover > td.el-table__cell {
+  background-color: rgba(30, 42, 68, 0.55) !important;
 }
 
 .el-dialog {
