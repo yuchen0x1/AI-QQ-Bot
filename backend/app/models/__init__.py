@@ -36,7 +36,7 @@ from app.models.task import (
     SystemSetting,
     TaskRecord,
 )
-from app.models.user import AuditLog, Role, User
+from app.models.user import AuditLog, AuthSession, Role, User
 
 __all__ = [
     "Base",
@@ -44,6 +44,7 @@ __all__ = [
     "User",
     "Role",
     "AuditLog",
+    "AuthSession",
     "Account",
     "AccountConnection",
     "Group",

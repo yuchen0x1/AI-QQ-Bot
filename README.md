@@ -8,6 +8,7 @@
 
 - FastAPI + SQLAlchemy 2 异步 ORM；PostgreSQL 生产库，SQLite 便于本地测试；Alembic 迁移入口。
 - JWT 登录、密码哈希、登录失败锁定、RBAC 权限、敏感配置加密、操作审计和请求限流。
+- TOTP 两步验证（二维码绑定、验证码启用/关闭、challenge 防重放）与数据库登录会话管理：查看活跃设备、撤销单个/其它会话，改密、重置密码、关闭 2FA 时自动作废旧令牌，API 与 WebSocket 均校验会话有效性。
 - 多账号运行时：QQ 官方机器人 v2（AppAccessToken、Gateway WebSocket 或 Webhook 回调、Identify/Heartbeat/Resume、op=13 回调地址验证、Ed25519 事件验签、被动回复与主动消息、OpenID 映射）、OneBot v11 HTTP/WebSocket 兼容接入、Mock 测试适配器、连接状态与退避重连。
 - 群聊配置、成员同步、群管理动作、自动审核、命令权限和消息统计；OneBot 好友/加群申请持久化、去重、RBAC 审批及操作审计。
 - OpenAI 兼容 Provider、多模型管理、密钥脱敏、模型调用/测试、会话上下文与失败降级。

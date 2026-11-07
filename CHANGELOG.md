@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 2026-11-08 — 后台两步验证与登录会话管理
+
+- **TOTP 两步验证**：新增 `app/core/totp.py`（标准库实现，Base32 密钥、HMAC-SHA1、6 位 / 30 秒、前后各容忍 1 个时间窗、`otpauth://` URI），无新增第三方依赖。`users` 增加 `totp_secret_enc`（Fernet 加密）、`totp_enabled`、`totp_last_counter`（防同一时间窗重放）、`totp_challenge_nonce`。
+- **登录流程**：启用 2FA 后 `POST /auth/login` 不再直接发正式令牌，改为返回 5 分钟有效的 `challenge_token`（绑定 `purpose=2fa_challenge`、一次性 nonce 与密码版本）；`POST /auth/login/2fa` 校验挑战、TOTP 与限流后签发正式 JWT。前端登录页新增验证码阶段（`autocomplete="one-time-code"`）。
+- **2FA 管理 API**：`GET /auth/2fa`、`POST /auth/2fa/setup|confirm|disable`。setup 只在未启用时生成密钥；confirm 必须提交当前验证码；disable 同时校验密码与验证码，成功后撤销该用户全部会话。设置页新增绑定向导（二维码、手动密钥复制、启用/关闭）。
+- **登录会话**：`create_access_token` 默认携带 `jti`，新表 `auth_sessions`（迁移 `0006_auth_security`）记录 IP、User-Agent、过期与最近访问时间。`get_current_user` 与三个 WebSocket 端点均校验会话存在、未撤销、未过期；退出登录、改密、管理员重置密码都会撤销对应会话，改密接口返回新 JWT 供前端平滑续接。
+- **会话 API**：`GET /auth/sessions`、`DELETE /auth/sessions/{id}`（禁止撤销当前会话）、`POST /auth/sessions/revoke-others`；设置页新增活跃会话列表（设备、IP、登录/最近使用时间、当前标记、撤销操作）。
+- 兼容性：不带 `jti` 的历史 JWT 仍按原密码版本机制校验，升级后旧令牌不会突然全部失效，新签发令牌才进入数据库会话校验。
+- 验证：后端 pytest 97 项通过（含 TOTP 登录、挑战重放拒绝、验证码重放、会话撤销、迁移 head 一致性）；`ruff check app tests migrations` 通过；`npm run build` 通过。
+
 ## 2026-11-05 — 运行时稳定性修复（P0）
 
 - **AI 回复移出事件流**：`BotEngine` 新增后台任务调度（`schedule_ai_reply`），消息落库、自动管理、命令响应仍在事件流内同步完成，只有 AI 生成被移到独立任务。按账号的 `asyncio.Semaphore`（`AI_MAX_CONCURRENCY`，默认 4）限制在途请求，按 `(账号, 群/私聊)` 的会话锁保证同一会话内顺序不被打乱。修复了「一条慢模型请求让同账号所有群消息排队，队列打满后阻塞 WebSocket reader」的吞吐瓶颈。

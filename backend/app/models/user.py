@@ -36,6 +36,10 @@ class User(Base, TimestampMixin):
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_ip: Mapped[str | None] = mapped_column(String(64))
+    totp_secret_enc: Mapped[str | None] = mapped_column(Text())
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    totp_last_counter: Mapped[int | None] = mapped_column(Integer)
+    totp_challenge_nonce: Mapped[str | None] = mapped_column(String(64))
 
     role: Mapped[Role | None] = relationship(back_populates="users", lazy="joined")
 
@@ -54,6 +58,21 @@ class User(Base, TimestampMixin):
         if self.role and self.role.name == "super_admin":
             perms.add("*")
         return perms
+
+
+class AuthSession(Base, TimestampMixin):
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    jti: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    ip: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(500))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship()
 
 
 class AuditLog(Base):

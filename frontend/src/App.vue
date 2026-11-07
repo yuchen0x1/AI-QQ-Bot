@@ -121,6 +121,7 @@ async function submitChangePassword() {
         old_password: pwdForm.value.old_password,
         new_password: pwdForm.value.new_password,
       })
+      if (data.access_token) localStorage.setItem('qbot_token', data.access_token)
       ElMessage.success(data.detail || '密码已修改，请妥善保存')
       pwdDialogVisible.value = false
     } catch (err: any) {

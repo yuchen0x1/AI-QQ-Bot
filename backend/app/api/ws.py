@@ -14,7 +14,7 @@ from app.core.events import event_hub
 from app.core.logging import hub
 from app.core.security import decode_access_token, token_matches_user
 from app.db.session import SessionLocal
-from app.models import Message, User
+from app.models import AuthSession, Message, User
 from app.services.account_manager import account_manager
 from app.services.scheduler import scheduler_service
 
@@ -31,6 +31,17 @@ async def _authenticate(token: str | None) -> User | None:
         user = await db.scalar(select(User).where(User.username == payload.get("sub")))
         if not user or not user.is_active or not token_matches_user(payload, user.password_hash):
             return None
+        jti = payload.get("jti")
+        if jti:
+            session = await db.scalar(select(AuthSession).where(AuthSession.jti == jti, AuthSession.user_id == user.id))
+            now = datetime.now(timezone.utc)
+            expires_at = session.expires_at if session else None
+            if expires_at and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if not session or session.revoked_at or (expires_at and expires_at <= now):
+                return None
+            session.last_seen_at = now
+            await db.commit()
         return user
 
 

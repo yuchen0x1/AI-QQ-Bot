@@ -125,3 +125,53 @@ async def test_admin_reset_password_revokes_user_tokens(client: httpx.AsyncClien
     resp = await client.put(f"/api/users/{target['id']}", headers=admin_headers, json={"password": "Reset@123456"})
     assert resp.status_code == 200
     assert (await client.get("/api/auth/me", headers=headers)).status_code == 401
+
+
+async def test_totp_login_and_session_revocation(client: httpx.AsyncClient, admin_headers: dict[str, str]):
+    created = await client.post(
+        "/api/users",
+        headers=admin_headers,
+        json={"username": "totp_user", "password": "Totp@12345"},
+    )
+    assert created.status_code in (201, 409), created.text
+
+    login = await client.post("/api/auth/login", json={"username": "totp_user", "password": "Totp@12345"})
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    setup = await client.post("/api/auth/2fa/setup", headers=headers)
+    assert setup.status_code == 200
+    secret = setup.json()["secret"]
+    from app.core.totp import generate_code
+
+    confirm = await client.post("/api/auth/2fa/confirm", headers=headers, json={"code": generate_code(secret)})
+    assert confirm.status_code == 200
+
+    client.cookies.clear()
+    two_factor_login = await client.post("/api/auth/login", json={"username": "totp_user", "password": "Totp@12345"})
+    assert two_factor_login.status_code == 200
+    challenge = two_factor_login.json()
+    assert challenge["requires_2fa"] is True
+    assert challenge["access_token"] is None
+
+    verified = await client.post(
+        "/api/auth/login/2fa",
+        json={"challenge_token": challenge["challenge_token"], "code": generate_code(secret)},
+    )
+    assert verified.status_code == 200
+    token = verified.json()["access_token"]
+    session_headers = {"Authorization": f"Bearer {token}"}
+    sessions = await client.get("/api/auth/sessions", headers=session_headers)
+    assert sessions.status_code == 200
+    current = next(item for item in sessions.json() if item["current"])
+
+    replay = await client.post(
+        "/api/auth/login/2fa",
+        json={"challenge_token": challenge["challenge_token"], "code": generate_code(secret)},
+    )
+    assert replay.status_code == 401
+    assert (await client.delete(f"/api/auth/sessions/{current['id']}", headers=session_headers)).status_code == 400
+
+    logout = await client.post("/api/auth/logout", headers=session_headers)
+    assert logout.status_code == 200
+    assert (await client.get("/api/auth/me", headers=session_headers)).status_code == 401

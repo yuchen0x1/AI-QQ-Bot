@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, computed_field
 
-from app.schemas.common import ORMModel
+from app.schemas.common import MessageOut, ORMModel
 
 
 class LoginRequest(BaseModel):
@@ -14,11 +14,44 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class TwoFactorVerifyRequest(BaseModel):
+    challenge_token: str = Field(min_length=1)
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class TwoFactorConfirmRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class TwoFactorDisableRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
 class TokenOut(BaseModel):
-    access_token: str
+    access_token: str | None = None
     token_type: str = "bearer"
     expires_in: int
-    user: "UserOut"
+    user: "UserOut | None" = None
+    requires_2fa: bool = False
+    challenge_token: str | None = None
+
+
+class TwoFactorSetupOut(BaseModel):
+    enabled: bool
+    secret: str | None = None
+    provisioning_uri: str | None = None
+
+
+class SessionOut(ORMModel):
+    id: int
+    ip: str | None = None
+    user_agent: str | None = None
+    expires_at: datetime
+    last_seen_at: datetime
+    created_at: datetime
+    revoked_at: datetime | None = None
+    current: bool = False
 
 
 class RoleOut(ORMModel):
@@ -48,6 +81,11 @@ class UserOut(ORMModel):
 class PasswordChange(BaseModel):
     old_password: str
     new_password: str = Field(min_length=8, max_length=128)
+
+
+class PasswordChangeOut(MessageOut):
+    access_token: str
+    expires_in: int
 
 
 class UserCreate(BaseModel):

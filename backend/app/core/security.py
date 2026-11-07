@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -46,7 +47,12 @@ def create_access_token(
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=expires_minutes or settings.access_token_expire_minutes
     )
-    payload: dict[str, Any] = {"sub": subject, "exp": expire, "iat": datetime.now(timezone.utc)}
+    payload: dict[str, Any] = {
+        "sub": subject,
+        "exp": expire,
+        "iat": datetime.now(timezone.utc),
+        "jti": str(uuid.uuid4()),
+    }
     if password_hash:
         payload["pwd_v"] = password_stamp(password_hash)
     if extra:

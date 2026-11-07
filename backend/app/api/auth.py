@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -11,15 +12,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import client_ip, get_current_user, require
 from app.core.config import settings
 from app.core.ratelimit import login_limiter
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import (
+    create_access_token,
+    decode_access_token,
+    decrypt_secret,
+    encrypt_secret,
+    hash_password,
+    token_matches_user,
+    verify_password,
+)
+from app.core.totp import generate_secret, matching_counter, provisioning_uri
 from app.db.session import get_db
-from app.models import AuditLog, GithubRepository, LoginAttempt, Role, User
+from app.models import AuditLog, AuthSession, GithubRepository, LoginAttempt, Role, User
 from app.schemas.auth import (
     AuditLogOut,
     LoginRequest,
     PasswordChange,
+    PasswordChangeOut,
     RoleOut,
+    SessionOut,
     TokenOut,
+    TwoFactorConfirmRequest,
+    TwoFactorDisableRequest,
+    TwoFactorSetupOut,
+    TwoFactorVerifyRequest,
     UserCreate,
     UserOut,
     UserUpdate,
@@ -28,6 +44,55 @@ from app.schemas.common import MessageOut, Page
 from app.services.logs import audit, write_log
 
 router = APIRouter(tags=["认证"])
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _session_user_agent(request: Request) -> str | None:
+    value = request.headers.get("user-agent", "").strip()
+    return value[:500] or None
+
+
+async def _issue_token(db: AsyncSession, user: User, request: Request) -> tuple[str, int]:
+    expires_in = settings.access_token_expire_minutes * 60
+    token = create_access_token(
+        user.username,
+        {"role": user.role.name if user.role else "viewer"},
+        password_hash=user.password_hash,
+    )
+    decoded = decode_access_token(token)
+    if not decoded or not decoded.get("jti"):
+        raise HTTPException(status_code=500, detail="无法创建登录会话")
+    db.add(
+        AuthSession(
+            user_id=user.id,
+            jti=decoded["jti"],
+            ip=client_ip(request),
+            user_agent=_session_user_agent(request),
+            expires_at=datetime.fromtimestamp(decoded["exp"], tz=timezone.utc),
+            last_seen_at=_now(),
+        )
+    )
+    return token, expires_in
+
+
+async def _token_response(db: AsyncSession, user: User, request: Request, response: Response) -> TokenOut:
+    token, expires_in = await _issue_token(db, user, request)
+    response.set_cookie(
+        "qbot_token",
+        token,
+        httponly=True,
+        samesite="lax",
+        secure=settings.is_production,
+        max_age=expires_in,
+    )
+    return TokenOut(
+        access_token=token,
+        expires_in=expires_in,
+        user=UserOut.model_validate(user),
+    )
 
 
 @router.post("/auth/login", response_model=TokenOut)
@@ -70,29 +135,72 @@ async def login(payload: LoginRequest, request: Request, response: Response, db:
     await db.commit()
     await db.refresh(user)
 
-    token = create_access_token(
-        user.username,
-        {"role": user.role.name if user.role else "viewer"},
-        password_hash=user.password_hash,
-    )
-    response.set_cookie(
-        "qbot_token",
-        token,
-        httponly=True,
-        samesite="lax",
-        secure=settings.is_production,
-        max_age=settings.access_token_expire_minutes * 60,
-    )
+    if user.totp_enabled:
+        user.totp_challenge_nonce = secrets.token_urlsafe(32)
+        await db.commit()
+        challenge = create_access_token(
+            user.username,
+            {"purpose": "2fa_challenge", "nonce": user.totp_challenge_nonce},
+            expires_minutes=5,
+            password_hash=user.password_hash,
+        )
+        await audit(db, user_id=user.id, username=user.username, action="login_2fa_required", ip=ip)
+        return TokenOut(
+            expires_in=300,
+            requires_2fa=True,
+            challenge_token=challenge,
+        )
+
+    token_response = await _token_response(db, user, request, response)
+    await db.commit()
     await audit(db, user_id=user.id, username=user.username, action="login", ip=ip)
-    return TokenOut(
-        access_token=token,
-        expires_in=settings.access_token_expire_minutes * 60,
-        user=UserOut.model_validate(user),
-    )
+    return token_response
+
+
+@router.post("/auth/login/2fa", response_model=TokenOut)
+async def verify_login_2fa(
+    payload: TwoFactorVerifyRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    allowed, retry_after = login_limiter.allow(f"2fa:{payload.challenge_token}:{client_ip(request)}")
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"验证码尝试过于频繁，请 {retry_after} 秒后再试")
+    decoded = decode_access_token(payload.challenge_token)
+    if not decoded or decoded.get("purpose") != "2fa_challenge" or not decoded.get("sub"):
+        raise HTTPException(status_code=401, detail="二次验证已过期，请重新登录")
+    user = await db.scalar(select(User).where(User.username == decoded["sub"]))
+    if not user or not user.is_active or not token_matches_user(decoded, user.password_hash) or not user.totp_enabled or decoded.get("nonce") != user.totp_challenge_nonce:
+        raise HTTPException(status_code=401, detail="二次验证已失效，请重新登录")
+    secret = decrypt_secret(user.totp_secret_enc)
+    counter = matching_counter(secret or "", payload.code)
+    if counter is None or (user.totp_last_counter is not None and counter <= user.totp_last_counter):
+        raise HTTPException(status_code=401, detail="验证码错误或已使用")
+    user.totp_last_counter = counter
+    user.totp_challenge_nonce = None
+    token_response = await _token_response(db, user, request, response)
+    await db.commit()
+    await audit(db, user_id=user.id, username=user.username, action="login_2fa", ip=client_ip(request))
+    return token_response
 
 
 @router.post("/auth/logout", response_model=MessageOut)
-async def logout(response: Response):
+async def logout(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    token = request.headers.get("authorization", "")
+    raw_token = token[7:] if token.lower().startswith("bearer ") else request.cookies.get("qbot_token")
+    if raw_token:
+        decoded = decode_access_token(raw_token)
+        jti = decoded.get("jti") if decoded else None
+        if jti:
+            session = await db.scalar(select(AuthSession).where(AuthSession.jti == jti))
+            if session and not session.revoked_at:
+                session.revoked_at = _now()
+                await db.commit()
     response.delete_cookie("qbot_token")
     return MessageOut(detail="已退出登录")
 
@@ -102,30 +210,171 @@ async def me(user: User = Depends(get_current_user)):
     return UserOut.model_validate(user)
 
 
-@router.post("/auth/password", response_model=MessageOut)
+@router.get("/auth/2fa", response_model=TwoFactorSetupOut)
+async def two_factor_status(user: User = Depends(get_current_user)):
+    return TwoFactorSetupOut(enabled=user.totp_enabled)
+
+
+@router.post("/auth/2fa/setup", response_model=TwoFactorSetupOut)
+async def two_factor_setup(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if user.totp_enabled:
+        raise HTTPException(status_code=400, detail="两步验证已启用，请先关闭后再重新绑定")
+    secret = generate_secret()
+    user.totp_secret_enc = encrypt_secret(secret)
+    user.totp_enabled = False
+    user.totp_last_counter = None
+    await db.commit()
+    return TwoFactorSetupOut(
+        enabled=False,
+        secret=secret,
+        provisioning_uri=provisioning_uri(secret, user.username, settings.app_name),
+    )
+
+
+@router.post("/auth/2fa/confirm", response_model=TwoFactorSetupOut)
+async def two_factor_confirm(
+    payload: TwoFactorConfirmRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if user.totp_enabled:
+        raise HTTPException(status_code=400, detail="两步验证已启用")
+    secret = decrypt_secret(user.totp_secret_enc)
+    counter = matching_counter(secret or "", payload.code)
+    if counter is None:
+        raise HTTPException(status_code=400, detail="验证码错误，请确认设备时间同步后重试")
+    user.totp_enabled = True
+    user.totp_last_counter = None
+    await db.commit()
+    await audit(db, user_id=user.id, username=user.username, action="enable_2fa", ip=client_ip(request))
+    return TwoFactorSetupOut(enabled=True)
+
+
+@router.post("/auth/2fa/disable", response_model=TwoFactorSetupOut)
+async def two_factor_disable(
+    payload: TwoFactorDisableRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=400, detail="密码不正确")
+    secret = decrypt_secret(user.totp_secret_enc)
+    counter = matching_counter(secret or "", payload.code)
+    if counter is None:
+        raise HTTPException(status_code=400, detail="验证码错误")
+    user.totp_enabled = False
+    user.totp_secret_enc = None
+    user.totp_last_counter = None
+    user.totp_challenge_nonce = None
+    await db.execute(update(AuthSession).where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None)).values(revoked_at=_now()))
+    await db.commit()
+    response.delete_cookie("qbot_token")
+    await audit(db, user_id=user.id, username=user.username, action="disable_2fa", ip=client_ip(request))
+    return TwoFactorSetupOut(enabled=False)
+
+
+@router.get("/auth/sessions", response_model=list[SessionOut])
+async def list_sessions(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    current_token = request.headers.get("authorization", "")
+    raw_token = current_token[7:] if current_token.lower().startswith("bearer ") else request.cookies.get("qbot_token")
+    current_jti = (decode_access_token(raw_token) or {}).get("jti") if raw_token else None
+    now = _now()
+    rows = await db.scalars(
+        select(AuthSession)
+        .where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))
+        .order_by(AuthSession.last_seen_at.desc())
+    )
+    result = []
+    for row in rows:
+        expires_at = row.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= now:
+            continue
+        result.append(
+            SessionOut(
+                id=row.id,
+                ip=row.ip,
+                user_agent=row.user_agent,
+                expires_at=expires_at,
+                last_seen_at=row.last_seen_at,
+                created_at=row.created_at,
+                revoked_at=row.revoked_at,
+                current=row.jti == current_jti,
+            )
+        )
+    return result
+
+
+@router.delete("/auth/sessions/{session_id}", response_model=MessageOut)
+async def revoke_session(
+    session_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    row = await db.scalar(select(AuthSession).where(AuthSession.id == session_id, AuthSession.user_id == user.id))
+    if not row:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    current_token = request.headers.get("authorization", "")
+    raw_token = current_token[7:] if current_token.lower().startswith("bearer ") else request.cookies.get("qbot_token")
+    if raw_token and (decode_access_token(raw_token) or {}).get("jti") == row.jti:
+        raise HTTPException(status_code=400, detail="不能撤销当前会话，请使用退出登录")
+    row.revoked_at = _now()
+    await db.commit()
+    return MessageOut(detail="会话已撤销")
+
+
+@router.post("/auth/sessions/revoke-others", response_model=MessageOut)
+async def revoke_other_sessions(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    current_token = request.headers.get("authorization", "")
+    raw_token = current_token[7:] if current_token.lower().startswith("bearer ") else request.cookies.get("qbot_token")
+    current_jti = (decode_access_token(raw_token) or {}).get("jti") if raw_token else None
+    await db.execute(
+        update(AuthSession)
+        .where(AuthSession.user_id == user.id, AuthSession.jti != current_jti, AuthSession.revoked_at.is_(None))
+        .values(revoked_at=_now())
+    )
+    await db.commit()
+    return MessageOut(detail="其它登录会话已撤销")
+
+
+@router.post("/auth/password", response_model=PasswordChangeOut)
 async def change_password(
     payload: PasswordChange, request: Request, response: Response, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ):
     if not verify_password(payload.old_password, user.password_hash):
         raise HTTPException(status_code=400, detail="原密码不正确")
     user.password_hash = hash_password(payload.new_password)
+    await db.execute(update(AuthSession).where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None)).values(revoked_at=_now()))
     await db.commit()
     # 签发包含最新密码 hash 的新 token 写回 Cookie，确保当前会话平滑过渡同时作废其它会话
-    new_token = create_access_token(
-        user.username,
-        {"role": user.role.name if user.role else "viewer"},
-        password_hash=user.password_hash,
-    )
+    new_token, expires_in = await _issue_token(db, user, request)
     response.set_cookie(
         "qbot_token",
         new_token,
         httponly=True,
         samesite="lax",
         secure=settings.is_production,
-        max_age=settings.access_token_expire_minutes * 60,
+        max_age=expires_in,
     )
+    await db.commit()
     await audit(db, user_id=user.id, username=user.username, action="change_password", ip=client_ip(request))
-    return MessageOut(detail="密码已更新")
+    return PasswordChangeOut(detail="密码已更新", access_token=new_token, expires_in=expires_in)
 
 
 @router.get("/roles", response_model=list[RoleOut])
@@ -197,6 +446,11 @@ async def update_user(
         if field == "password":
             if value:
                 user.password_hash = hash_password(value)
+                await db.execute(
+                    update(AuthSession)
+                    .where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))
+                    .values(revoked_at=_now())
+                )
             continue
         setattr(user, field, value)
     await db.commit()

@@ -6,12 +6,22 @@ API 前缀为 `/api`，Swagger 为 `/api/docs`，OpenAPI 为 `/api/openapi.json`
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| POST | `/auth/login` | 登录、签发 JWT |
-| POST | `/auth/logout` | 清除 Cookie |
+| POST | `/auth/login` | 登录、签发 JWT；启用 TOTP 时改为返回 5 分钟有效的 `challenge_token` |
+| POST | `/auth/login/2fa` | 提交 `challenge_token` + 6 位验证码，换取正式 JWT |
+| POST | `/auth/logout` | 撤销当前会话并清除 Cookie |
 | GET | `/auth/me` | 当前用户 |
-| POST | `/auth/password` | 修改密码 |
-| GET/POST/PUT/DELETE | `/users`、`/users/{id}` | 用户管理 |
+| POST | `/auth/password` | 修改密码；撤销全部旧会话并返回新 JWT |
+| GET | `/auth/2fa` | 两步验证状态 |
+| POST | `/auth/2fa/setup` | 生成 TOTP 密钥（Fernet 加密存储，返回一次明文密钥与 `otpauth://` URI） |
+| POST | `/auth/2fa/confirm` | 提交验证码启用 TOTP |
+| POST | `/auth/2fa/disable` | 同时校验密码与验证码后关闭 TOTP，并撤销该用户全部会话 |
+| GET | `/auth/sessions` | 当前用户活跃会话（IP、User-Agent、登录/最近使用时间，标记当前会话） |
+| DELETE | `/auth/sessions/{id}` | 撤销指定的非当前会话 |
+| POST | `/auth/sessions/revoke-others` | 撤销除当前会话外的全部会话 |
+| GET/POST/PUT/DELETE | `/users`、`/users/{id}` | 用户管理（重置密码会撤销目标用户全部会话） |
 | GET | `/roles`、`/audit-logs` | 角色和审计 |
+
+每个正式 JWT 携带 `jti` 并对应一条 `auth_sessions` 记录；普通 API 与 `/ws/*` 都会校验会话是否被撤销或过期。挑战令牌绑定 `purpose=2fa_challenge`、一次性 nonce 与密码版本，不能重复使用；TOTP 校验带 `totp_last_counter` 防同一时间窗口重放。
 
 ## QQ 与群聊
 

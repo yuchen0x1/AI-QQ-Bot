@@ -17,7 +17,7 @@ from app.db.migrations import SchemaVersionError
 from app.db.session import SessionLocal
 from app.models import Base, BotCommand, Plugin, Role, SystemSetting, User
 
-HEAD = "0005_github_oauth"
+HEAD = "0006_auth_security"
 
 
 @pytest.fixture
