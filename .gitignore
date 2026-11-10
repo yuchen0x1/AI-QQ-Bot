@@ -17,8 +17,13 @@ backups/*
 data/*
 !data/.gitkeep
 *.log
+# 测试/构建产生的临时输出（曾误入库，里面可能带 JWT 等运行期信息）
+pytest_out.txt
+*.orig
+*.rej
 
 # 本地工作目录与工具产物（不入库）
 .downloads/
 .workbuddy/
 napcat/
+.screenshots/
