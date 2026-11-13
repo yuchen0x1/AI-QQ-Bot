@@ -12,7 +12,7 @@
         <el-form-item label="动态验证码" prop="code"><el-input v-model="otpForm.code" size="large" maxlength="6" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" /></el-form-item>
         <el-button class="login-submit" type="primary" size="large" :loading="loading" @click="verifyOtp">验证并登录 <el-icon><ArrowRight /></el-icon></el-button>
         <el-button class="back-login" text @click="resetLogin">返回登录</el-button>
-      </el-form><div class="login-foot"><span class="pulse-dot"></span>安全连接已启用 <span class="login-version">QBOT AI · 1.0</span></div>
+      </el-form><div class="login-foot"><span class="pulse-dot"></span>安全连接已启用 <span class="login-version">QBOT AI · {{ uiVersion }}</span></div>
     </section><div class="login-side-copy"><div class="login-side-orb"><span></span><span></span><span></span></div><h2>一个平台<br/>掌控所有机器人</h2><p>多账号隔离 · 智能群管理 · AI 对话<br/>GitHub 版本追踪 · 自动化任务</p></div>
   </div>
 </template>
@@ -22,6 +22,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowRight, Lock, User } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
+import { version as uiVersion } from '../../package.json'
 const router = useRouter(), route = useRoute(), formRef = ref(), otpFormRef = ref(), loading = ref(false)
 const form = reactive({ username: '', password: '' })
 const otpForm = reactive({ code: '' })

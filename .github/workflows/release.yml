@@ -20,6 +20,10 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: backend/requirements*.txt
+      - name: Validate versions and release notes
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: python scripts/prepare_release.py --tag "${VERSION}" --notes-output "${RUNNER_TEMP}/qbot-release-notes.md"
       - name: Backend verification
         working-directory: backend
         run: |
@@ -53,7 +57,9 @@ jobs:
           VERSION_NUMBER="${VERSION#v}"
           mkdir -p release
           git archive --format=tar.gz --prefix="qbot-ai-${VERSION_NUMBER}/" "${GITHUB_SHA}" > "release/qbot-ai-${VERSION_NUMBER}.tar.gz"
-          sha256sum release/* > release/SHA256SUMS
+          python scripts/package_server.py --output "release/qbot-ai-${VERSION_NUMBER}.zip"
+          cd release
+          sha256sum qbot-ai-*.tar.gz qbot-ai-*.zip > SHA256SUMS
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,4 +68,5 @@ jobs:
           gh release create "${VERSION}" release/* \
             --verify-tag \
             --title "QBot AI ${VERSION}" \
-            --generate-notes
+            --notes-file "${RUNNER_TEMP}/qbot-release-notes.md" \
+            --latest

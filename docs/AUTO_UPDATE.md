@@ -27,7 +27,7 @@ UPDATE_CHECK_INTERVAL_MINUTES=360
 ## 发布新版本
 
 1. 在 `main` 上完成代码、测试和文档。
-2. 将后端 `backend/app/core/version.py` 与前端 `frontend/package.json` 更新为同一 SemVer 版本。
+2. 将后端 `backend/app/core/version.py`、前端 `frontend/package.json` 及 `frontend/package-lock.json` 更新为同一 SemVer 版本；在 `docs/releases/release-notes.md` 添加对应版本的更新说明。
 3. 提交并推送 `main`，确认 CI 通过。
 4. 创建并推送标签：
 
@@ -36,7 +36,7 @@ UPDATE_CHECK_INTERVAL_MINUTES=360
    git push origin v1.1.1
    ```
 
-5. `release.yml` 会先运行后端测试/Ruff、前端构建和两个 Docker 镜像构建，再生成 `qbot-ai-<version>.tar.gz` 与 `SHA256SUMS`，最后使用最小 `GITHUB_TOKEN` 创建 Release。
+5. `release.yml` 会校验标签与前后端、锁文件版本一致且存在对应的更新说明；运行后端测试/Ruff、前端构建和两个 Docker 镜像构建，再生成 `qbot-ai-<version>.tar.gz`、可上传服务器的 `qbot-ai-<version>.zip` 与 `SHA256SUMS`，最后使用对应版本的更新说明创建 Release。将三个附件下载到同一目录即可执行 `sha256sum -c SHA256SUMS`。
 
 工作流不会覆盖已有 Release；同名标签的发布失败后应修复工作流或重新选择未占用版本号。正式发布仍需要维护者明确创建标签，不会因普通 push 自动发布。
 

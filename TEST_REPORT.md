@@ -1,5 +1,15 @@
 # TEST_REPORT
 
+## 发布准备：2026-11-14（v1.2.0）
+
+- PASS：前后端、npm 锁文件及登录页版本统一为 1.2.0，README 与对应版本更新说明同步。
+- PASS：`python -m pytest -q tests/test_update_checker.py --tb=short`，4 项版本比较与更新接口检查通过；本轮后端行为仅修改版本元数据。
+- PASS：`npm run build`，Vue 类型检查与生产构建通过；登录页版本从包元数据读取。
+- PASS：`python scripts/prepare_release.py --tag v1.2.0 --notes-output ...`，版本与更新说明校验通过；错误版本标签和预发布标签均被拒绝。
+- PASS：ZIP 上传包包含正确版本、官方接入和教学资源，排除本机 `.env`、数据库与私钥；发布工作流 YAML 解析通过。
+
+标签发布工作流将重新执行完整后端检查、前端构建及两个容器镜像构建，生成 ZIP / tar.gz / SHA256SUMS 并使用对应版本的更新说明创建正式 Release。实际远程结果以标签对应的 Actions 记录及 Release 附件为准。
+
 ## 服务器验收：2026-11-14（公网部署与迁移）
 
 - PASS：`https://xiaoshuo.lenmo.top/api/system/health` 返回 200，数据库正常；HTTP 跳转 HTTPS，未登录访问账号 API 返回 401，`.env` 路径返回 403。
