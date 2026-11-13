@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import httpx
 from app.adapters.qq_official import sanitize_official_text
-from app.services.alerting import _build_payload, _detect_channel
+from app.services.alerting import _build_payload, _detect_channel, validate_webhook_url
 from app.services.scheduler import _task_clean_expired_data
 
 
@@ -36,6 +36,16 @@ def test_alert_channel_detection_and_payload():
     assert _detect_channel(wechat_url) == "wechat"
     wechat_payload = _build_payload("wechat", "测试标题", "错误详情")
     assert wechat_payload["msgtype"] == "markdown"
+
+
+def test_alert_webhook_url_blocks_ssrf_targets():
+    assert validate_webhook_url("https://open.feishu.cn/open-apis/bot/v2/hook/xyz")[0] is True
+    assert validate_webhook_url("file:///etc/passwd")[0] is False
+    assert validate_webhook_url("http://127.0.0.1:8080/health")[0] is False
+    assert validate_webhook_url("http://169.254.169.254/latest/meta-data")[0] is False
+    assert validate_webhook_url("http://localhost:8080/hook")[0] is False
+    assert validate_webhook_url("http://internal-service/hook")[0] is False
+    assert validate_webhook_url("http://10.0.0.5/hook", allow_private=True)[0] is True
 
 
 async def test_clean_expired_data_job(client: httpx.AsyncClient):

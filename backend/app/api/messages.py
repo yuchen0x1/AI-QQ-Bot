@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -10,20 +10,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import AdapterError, UnsupportedAction
 from app.api.deps import require
+from app.api.pagination import PageParam, PageSizeParam
+from app.core.timeutil import date_bucket
 from app.db.session import get_db
 from app.models import Account, Message, User
 from app.schemas.account import MessageOut, SendMessageRequest
 from app.schemas.common import Page
 from app.services.account_manager import account_manager
 from app.services.logs import write_log
+from app.services.group_display import group_labels
 
 router = APIRouter(prefix="/messages", tags=["消息"])
 
 
 @router.get("", response_model=Page[MessageOut])
 async def list_messages(
-    page: int = 1,
-    page_size: int = 20,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 20,
     account_id: int | None = None,
     qq_group: int | None = None,
     direction: str | None = None,
@@ -51,7 +54,15 @@ async def list_messages(
         query = query.where(Message.blocked.is_(blocked))
     total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = await db.scalars(query.order_by(Message.id.desc()).offset((page - 1) * page_size).limit(page_size))
-    return Page(items=[MessageOut.model_validate(m) for m in rows], total=total, page=page, page_size=page_size)
+    labels = await group_labels(db)
+    items = []
+    for message in rows:
+        item = MessageOut.model_validate(message)
+        label = labels.get((message.account_id, message.qq_group), {})
+        item.group_display_number = label.get("number")
+        item.group_display_name = label.get("name")
+        items.append(item)
+    return Page(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.post("/send")
@@ -66,7 +77,9 @@ async def send_message(
     try:
         if payload.qq_group:
             result = await account_manager.send_group_message(account.id, payload.qq_group, payload.content)
-            target = f"群 {payload.qq_group}"
+            labels = await group_labels(db)
+            label = labels.get((account.id, payload.qq_group), {})
+            target = f"群 {label['number']}" if label.get("number") else label.get("name") or "所选群聊"
         else:
             result = await account_manager.send_private_message(account.id, payload.user_id, payload.content)
             target = f"用户 {payload.user_id}"
@@ -102,13 +115,12 @@ async def send_message(
 async def message_stats(
     days: int = Query(default=7, ge=1, le=30), db: AsyncSession = Depends(get_db), _: User = Depends(require("message:view"))
 ):
-    from datetime import timedelta, timezone
-
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    day_expr = date_bucket(Message.created_at, db.bind.dialect.name if db.bind is not None else "sqlite")
     rows = await db.execute(
-        select(func.date(Message.created_at), Message.direction, func.count(Message.id))
+        select(day_expr, Message.direction, func.count(Message.id))
         .where(Message.created_at >= since)
-        .group_by(func.date(Message.created_at), Message.direction)
+        .group_by(day_expr, Message.direction)
     )
     buckets: dict[str, dict[str, int]] = {}
     for day, direction, count in rows.all():

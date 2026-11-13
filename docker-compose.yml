@@ -33,24 +33,6 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
     networks: [qbot_internal]
 
-  # Legacy OneBot v11 bridge. QQ 官方机器人接入不需要此服务；
-  # 仅在显式启用 --profile napcat 时启动，WebUI 不映射公网端口。
-  napcat-1:
-    image: mlikiowa/napcat-docker:v4.18.28
-    restart: unless-stopped
-    profiles: ["napcat"]
-    environment:
-      MODE: ws
-      WEBUI_TOKEN: ${NAPCAT_WEBUI_TOKEN:?Set NAPCAT_WEBUI_TOKEN in .env}
-      TZ: Asia/Shanghai
-    # Keep WebUI private. Backend reaches this service over qbot_internal.
-    expose: ["3000", "3001", "6099"]
-    volumes:
-      - napcat_1_qq:/app/.config/QQ
-      - napcat_1_config:/app/napcat/config
-      - napcat_1_plugins:/app/napcat/plugins
-    networks: [qbot_internal]
-
   backend:
     build: { context: ./backend, dockerfile: Dockerfile }
     restart: unless-stopped
@@ -59,7 +41,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qbot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qbot}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       REDIS_ENABLED: "true"
-      SCHEDULER_ENABLED: "false"
+      # 调度器必须和机器人连接同进程：推送/群消息任务依赖 account_manager 持有的
+      # in-process adapter，放进独立容器会因 _runtimes 为空而全部失败。
+      SCHEDULER_ENABLED: "true"
       DATA_DIR: /data
       BACKUP_DIR: /backups
       PLUGIN_DIR: /app/plugins
@@ -109,33 +93,11 @@ services:
       retries: 3
     networks: [qbot_internal]
 
-  scheduler:
-    build: { context: ./backend, dockerfile: Dockerfile }
-    restart: unless-stopped
-    env_file: .env
-    command: ["python", "-m", "app.scheduler_runner"]
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qbot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qbot}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      REDIS_ENABLED: "true"
-      SCHEDULER_ENABLED: "true"
-      DATA_DIR: /data
-      BACKUP_DIR: /backups
-      PLUGIN_DIR: /app/plugins
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-      backend: { condition: service_healthy }
-    volumes:
-      - app_data:/data
-      - app_backups:/backups
-      - ./backend/plugins:/app/plugins:ro
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os; os.kill(1, 0)\""]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks: [qbot_internal]
+  # 独立的 APScheduler 进程已移除：推送、定时群消息、AI 总结都要调用
+  # account_manager.send_group_message()，而 adapter 只存在于持有机器人连接的
+  # backend 进程里。拆出去会导致 _runtimes 为空、所有主动消息静默失败。
+  # app/scheduler_runner.py 保留给"连接已迁到独立连接服务"之后的实验性部署。
+  # 若确需启用，必须同时把 backend 的 SCHEDULER_ENABLED 设为 false，否则同一任务会双跑。
 
   frontend:
     build: { context: ./frontend, dockerfile: Dockerfile }
@@ -172,9 +134,6 @@ volumes:
   redis_data:
   app_data:
   app_backups:
-  napcat_1_qq:
-  napcat_1_config:
-  napcat_1_plugins:
 
 networks:
   qbot_internal:

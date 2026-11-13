@@ -23,6 +23,7 @@ from app.schemas.github import (
     GithubOAuthStatus,
     GithubRepoItem,
     GithubRepoList,
+    GithubTokenIn,
 )
 from app.services.github.client import GithubError
 from app.services.github.oauth import (
@@ -84,8 +85,30 @@ async def oauth_status(db: AsyncSession = Depends(get_db), user: User = Depends(
         redirect_uri=redirect_uri(),
         account=GithubAccountOut(**summary) if summary else None,
         can_configure=bool({"*", "system:manage"} & user.permission_set),
-        message=None if app else "尚未配置 GitHub OAuth App，配置后才能绑定账号并导入仓库",
+        message=None if app else "可直接使用 Token 连接 GitHub，无需创建 OAuth App 或配置回调域名",
     )
+
+
+@router.post("/token", response_model=GithubAccountOut)
+async def connect_token(
+    payload: GithubTokenIn, request: Request, db: AsyncSession = Depends(get_db), user: User = Depends(require("github:manage"))
+):
+    token = payload.token.strip()
+    try:
+        profile = await fetch_github_user(token)
+        row = await save_token(db, user, {"access_token": token, "token_type": "bearer", "scope": profile.get("scopes") or ""}, profile)
+    except OAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await audit(db, user_id=user.id, username=user.username, action="bind_github_token", target=row.login, ip=client_ip(request))
+    from app.services.github.automation import read_config, save_config
+    from app.services.scheduler import scheduler_service
+
+    config = await read_config(db, user.id)
+    if config.get("enabled"):
+        config.update(sync_requested=True, sync_status="queued")
+        await save_config(db, user.id, config)
+        scheduler_service.request_activity_sync()
+    return GithubAccountOut(**profile_summary(row))
 
 
 @router.get("/start")

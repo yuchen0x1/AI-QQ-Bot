@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.security import decode_access_token, token_matches_user
 from app.db.session import get_db
 from app.models import AuthSession, User
@@ -19,10 +20,24 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """解析客户端 IP。
+
+    只有直连对端属于 ``TRUSTED_PROXIES`` 时才采信 X-Forwarded-For，否则一律使用
+    socket 层地址。否则任何人都能通过伪造该头绕过按 IP 的登录限流，并把审计 IP
+    写成任意值。
+    """
+    peer = request.client.host if request.client else None
+    if peer and settings.is_trusted_proxy(peer):
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            # 取最右侧非代理条目：左侧由客户端控制，右侧才是代理追加的真实来源。
+            candidates = [item.strip() for item in forwarded.split(",") if item.strip()]
+            for candidate in reversed(candidates):
+                if not settings.is_trusted_proxy(candidate):
+                    return candidate
+            if candidates:
+                return candidates[0]
+    return peer or "unknown"
 
 
 async def get_current_user(

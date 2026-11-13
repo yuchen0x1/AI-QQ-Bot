@@ -68,6 +68,17 @@ async def create_monitored_repo(
     client = build_repository_provider(provider, token)
     info = await client.get_repo(owner, name)
 
+    interval = poll_interval_seconds
+    if interval is None:
+        from app.services.settings_store import read_setting
+
+        raw = await read_setting(db, "github_default_poll_seconds", 900)
+        try:
+            interval = int(raw)
+        except (TypeError, ValueError):
+            interval = 900
+        interval = max(60, min(86400, interval))
+
     repo = GithubRepository(
         provider=provider,
         owner=info.get("owner", {}).get("login") or owner,
@@ -84,7 +95,7 @@ async def create_monitored_repo(
         token_enc=encrypt_secret(token) if persist_token else None,
         webhook_secret_enc=encrypt_secret(webhook_secret),
         monitor_enabled=monitor_enabled,
-        poll_interval_seconds=poll_interval_seconds or 900,
+        poll_interval_seconds=interval,
         notify_prerelease=notify_prerelease,
     )
     db.add(repo)

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings as app_settings
@@ -130,7 +130,13 @@ async def build_message(
         values_assets = "（已关闭下载地址推送）"
     else:
         values_assets = None
-    template = rule.template or DEFAULT_TEMPLATE
+    # 模板优先级：规则自带 → 系统设置 push_default_template → 内置默认。
+    # 之前系统设置这一层从未被读取，管理员改了也不生效。
+    template = rule.template
+    if not template:
+        from app.services.settings_store import read_setting
+
+        template = await read_setting(db, "push_default_template", None) or DEFAULT_TEMPLATE
     values = build_values(repo, release, changelog=truncate(changelog, 1000), summary=summary)
     if values_assets is not None:
         values["downloads"] = values_assets
@@ -154,6 +160,8 @@ async def dispatch_release(
     rules = list(await db.scalars(select(PushRule).where(PushRule.repository_id == repo.id, PushRule.enabled.is_(True))))
     records: list[PushRecord] = []
     for rule in rules:
+        if "release" not in (rule.event_types or ["release"]):
+            continue
         if rule.only_stable and release.prerelease:
             continue
         existing = await db.scalar(
@@ -235,14 +243,34 @@ async def retry_failed_pushes(db: AsyncSession, limit: int = 20) -> dict[str, in
 
     rows = await db.scalars(
         select(PushRecord)
-        .where(PushRecord.status == "failed", PushRecord.retries < app_settings.push_max_retries)
+        .where(
+            or_(PushRecord.status == "failed", and_(PushRecord.status.in_(["pending", "retrying"]),
+                PushRecord.updated_at < datetime.now(timezone.utc) - timedelta(minutes=5))),
+            PushRecord.retries < app_settings.push_max_retries,
+        )
         .order_by(PushRecord.id.asc())
         .limit(limit)
     )
     stats = {"attempted": 0, "success": 0, "failed": 0}
     for record in list(rows):
+        rule = await db.get(PushRule, record.rule_id, populate_existing=True)
+        repo = await db.get(GithubRepository, record.repository_id, populate_existing=True)
+        if not rule or not repo or not rule.enabled or not repo.monitor_enabled or (rule.account_id, rule.qq_group) != (record.account_id, record.qq_group):
+            record.status = "cancelled"
+            record.error = "推送目标或启用状态已改变，取消旧通知"
+            await db.commit()
+            continue
+        if not account_manager.is_online(record.account_id):
+            # Planned restarts and transient disconnects must not consume delivery retries.
+            continue
+        claimed = await db.execute(update(PushRecord).where(PushRecord.id == record.id, PushRecord.status == record.status,
+                                                          PushRecord.retries == record.retries)
+                                   .values(status="retrying", retries=PushRecord.retries + 1))
+        await db.commit()
+        if not claimed.rowcount:
+            continue
+        await db.refresh(record)
         stats["attempted"] += 1
-        record.retries += 1
         try:
             result = await account_manager.send_group_message(record.account_id, record.qq_group, record.content or "")
             data = result.get("data") or {}
@@ -250,8 +278,11 @@ async def retry_failed_pushes(db: AsyncSession, limit: int = 20) -> dict[str, in
             record.message_id = data.get("message_id")
             record.sent_at = datetime.now(timezone.utc)
             record.error = None
+            rule.total_pushed += 1
+            rule.last_pushed_at = record.sent_at
             stats["success"] += 1
         except Exception as exc:  # noqa: BLE001
+            record.status = "failed"
             record.error = str(exc)[:500]
             stats["failed"] += 1
         await db.commit()

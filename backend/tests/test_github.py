@@ -247,7 +247,7 @@ async def test_failed_push_then_retry(client: httpx.AsyncClient, admin_headers: 
     created = await client.post(
         "/api/accounts",
         headers=admin_headers,
-        json={"name": "离线推送账号", "protocol": "mock", "connection_mode": "http", "qq_number": 300003},
+        json={"name": "离线推送账号", "protocol": "qq_official", "app_id": "999000001", "app_secret": "unit-fixture-secret", "connection_mode": "official_ws", "qq_number": 300003},
     )
     offline_account = created.json()
     rule = await client.post(

@@ -3,7 +3,12 @@ import { ElMessage } from 'element-plus'
 import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import type { Ref, ShallowRef } from 'vue'
 
+// 30 秒足够覆盖普通 CRUD；AI 端点走模型，超时上限可配到 600 秒，
+// 调用方用 `{ timeout: AI_TIMEOUT }` 单独覆盖。
 export const api = axios.create({ baseURL: '/api', timeout: 30000 })
+
+/** AI 相关请求的超时：模型侧 timeout 上限 600s，再留 30s 余量。 */
+export const AI_TIMEOUT = 630_000
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('qbot_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
@@ -20,7 +25,8 @@ api.interceptors.response.use((response) => response, (error) => {
   return Promise.reject(error)
 })
 
-export type Page<T> = { items: T[]; total: number; page: number; page_size: number; pages: number }
+// 后端分页响应的字段是 items/total/page/page_size，没有 pages。
+export type Page<T> = { items: T[]; total: number; page: number; page_size: number }
 export const unwrap = <T>(data: T | { data: T }): T => ('data' in (data as object) ? (data as { data: T }).data : data as T)
 
 export type SocketState = 'connecting' | 'open' | 'closed' | 'error'
@@ -31,7 +37,11 @@ export interface RealtimeSocket<T = unknown> {
   close: () => void
 }
 
-/** 连接后端实时通道。协议端每 25 秒发送 ping，客户端主动保持连接并在异常时指数重连。 */
+/** 连接后端实时通道。协议端每 25 秒发送 ping，客户端主动保持连接并在异常时指数重连。
+ *
+ * 认证使用一次性 ticket：访问令牌不进入查询串，避免被反向代理 access log 记录。
+ * ticket 只有 60 秒有效期，因此每次（重）连都要重新申请。
+ */
 export function useRealtimeSocket<T = Record<string, unknown>>(path: string, options: { reconnect?: boolean; maxDelay?: number } = {}): RealtimeSocket<T> {
   const state = ref<SocketState>('closed')
   const lastMessage = shallowRef<T | null>(null)
@@ -43,10 +53,9 @@ export function useRealtimeSocket<T = Record<string, unknown>>(path: string, opt
   let attempts = 0
   let stopped = false
 
-  const url = () => {
+  const url = (ticket: string) => {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const token = localStorage.getItem('qbot_token')
-    return `${protocol}//${location.host}/api${path}?token=${encodeURIComponent(token || '')}`
+    return `${protocol}//${location.host}/api${path}?ticket=${encodeURIComponent(ticket)}`
   }
   const clearTimers = () => {
     if (reconnectTimer) clearTimeout(reconnectTimer)
@@ -59,12 +68,23 @@ export function useRealtimeSocket<T = Record<string, unknown>>(path: string, opt
     const delay = Math.min(maxDelay, 1000 * 2 ** Math.min(attempts, 4))
     reconnectTimer = setTimeout(() => { reconnectTimer = undefined; connect() }, delay)
   }
-  const connect = () => {
+  const connect = async () => {
     if (!localStorage.getItem('qbot_token')) { state.value = 'closed'; return }
     if (stopped || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return
     clearTimers()
     state.value = 'connecting'
-    try { socket = new WebSocket(url()) } catch { state.value = 'error'; schedule(); return }
+    let ticket = ''
+    try {
+      const { data } = await api.post<{ ticket: string }>('/ws/ticket')
+      ticket = data.ticket
+    } catch {
+      state.value = 'error'
+      attempts += 1
+      schedule()
+      return
+    }
+    if (stopped) return
+    try { socket = new WebSocket(url(ticket)) } catch { state.value = 'error'; schedule(); return }
     socket.onopen = () => {
       attempts = 0
       state.value = 'open'

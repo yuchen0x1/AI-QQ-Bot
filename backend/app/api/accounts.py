@@ -7,15 +7,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import AdapterError
 from app.api.deps import client_ip, require
 from app.core.config import settings
 from app.core.security import encrypt_secret
+from app.core.timeutil import date_bucket, day_start
 from app.db.session import get_db
-from app.models import Account, AccountConnection, Group, Message, SystemLog, User
+from app.models import Account, AccountConnection, GithubNotificationTarget, Group, Message, PushRule, SystemLog, SystemSetting, User
 from app.schemas.account import (
     AccountCreate,
     AccountOut,
@@ -37,7 +38,6 @@ OFFICIAL_FEATURE_KEYS = (
     "official_api_base",
 )
 OFFICIAL_MODES = ("official_ws", "official_webhook")
-ONEBOT_MODES = ("ws_client", "ws_server", "http")
 OFFICIAL_FEATURE_DEFAULTS = {
     "official_sandbox": False,
     "official_intents": DEFAULT_OFFICIAL_INTENTS,
@@ -72,13 +72,10 @@ def serialize(account: Account, groups: int = 0) -> AccountOut:
         avatar_url=account.avatar_url,
         protocol=account.protocol,
         connection_mode=account.connection_mode,
-        api_base=account.api_base,
-        ws_url=account.ws_url,
         self_id=account.self_id,
         app_id=account.app_id,
         bot_openid=account.bot_openid,
         webhook_url=webhook_url(account),
-        has_token=bool(account.access_token_enc),
         has_secret=bool(account.app_secret_enc),
         official_sandbox=bool(official["official_sandbox"]),
         official_intents=int(official["official_intents"]),
@@ -104,21 +101,21 @@ async def _group_counts(db: AsyncSession) -> dict[int, int]:
 
 @router.get("", response_model=list[AccountOut])
 async def list_accounts(db: AsyncSession = Depends(get_db), _: User = Depends(require("account:view"))):
-    accounts = list(await db.scalars(select(Account).order_by(Account.id)))
+    accounts = list(await db.scalars(select(Account).where(Account.protocol == "qq_official").order_by(Account.id)))
     counts = await _group_counts(db)
     return [serialize(a, counts.get(a.id, 0)) for a in accounts]
 
 
 @router.get("/stats", response_model=AccountStatsOut)
 async def account_stats(db: AsyncSession = Depends(get_db), _: User = Depends(require("account:view"))):
-    accounts = list(await db.scalars(select(Account)))
+    accounts = list(await db.scalars(select(Account).where(Account.protocol == "qq_official")))
     online = sum(1 for a in accounts if account_manager.is_online(a.id))
     error = sum(
         1
         for a in accounts
         if a.connection and a.connection.status == "error" and not account_manager.is_online(a.id)
     )
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = day_start()
     sent = await db.scalar(
         select(func.count()).select_from(Message).where(Message.direction == "out", Message.created_at >= today)
     )
@@ -150,10 +147,6 @@ async def create_account(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require("account:manage")),
 ):
-    if payload.protocol == "onebot11" and not payload.api_base:
-        raise HTTPException(status_code=400, detail="OneBot v11 账号必须填写 HTTP API 地址（例如 http://127.0.0.1:3000）")
-    if payload.protocol == "onebot11" and payload.connection_mode == "ws_client" and not payload.ws_url:
-        raise HTTPException(status_code=400, detail="OneBot ws_client 模式必须填写 WebSocket 地址（例如 ws://127.0.0.1:3001）")
     if payload.protocol == "qq_official" and (not payload.app_id or not payload.app_secret):
         raise HTTPException(
             status_code=400,
@@ -165,14 +158,7 @@ async def create_account(
         "official_allow_proactive": bool(payload.official_allow_proactive),
         "official_api_base": payload.official_api_base or "",
     }
-    if payload.protocol == "qq_official":
-        connection_mode = (
-            payload.connection_mode if payload.connection_mode in OFFICIAL_MODES else "official_ws"
-        )
-    else:
-        connection_mode = (
-            payload.connection_mode if payload.connection_mode in ONEBOT_MODES else "ws_client"
-        )
+    connection_mode = payload.connection_mode
     account = Account(
         account_id=uuid.uuid4().hex[:12],
         name=payload.name,
@@ -180,11 +166,8 @@ async def create_account(
         nickname=payload.nickname,
         protocol=payload.protocol,
         connection_mode=connection_mode,
-        api_base=payload.api_base,
-        ws_url=payload.ws_url,
-        access_token_enc=encrypt_secret(payload.access_token),
-        app_id=payload.app_id if payload.protocol == "qq_official" else None,
-        app_secret_enc=encrypt_secret(payload.app_secret) if payload.protocol == "qq_official" else None,
+        app_id=payload.app_id,
+        app_secret_enc=encrypt_secret(payload.app_secret),
         enabled=payload.enabled,
         auto_start=payload.auto_start,
         auto_reconnect=payload.auto_reconnect,
@@ -228,25 +211,14 @@ async def update_account(
     data = payload.model_dump(exclude_unset=True)
     next_protocol = data.get("protocol", account.protocol)
     next_mode = data.get("connection_mode", account.connection_mode)
-    next_api_base = data.get("api_base", account.api_base)
-    next_ws_url = data.get("ws_url", account.ws_url)
     next_app_id = data.get("app_id", account.app_id)
-    if next_protocol == "onebot11" and not next_api_base:
-        raise HTTPException(status_code=400, detail="OneBot v11 账号必须填写 HTTP API 地址（例如 http://127.0.0.1:3000）")
-    if next_protocol == "onebot11" and next_mode == "ws_client" and not next_ws_url:
-        raise HTTPException(status_code=400, detail="OneBot ws_client 模式必须填写 WebSocket 地址（例如 ws://127.0.0.1:3001）")
-    if next_protocol == "qq_official" and (not next_app_id or not (data.get("app_secret") or account.app_secret_enc)):
+    if next_protocol != "qq_official":
+        raise HTTPException(status_code=400, detail="当前版本仅支持 QQ 官方机器人")
+    if not next_app_id or not (data.get("app_secret") or account.app_secret_enc):
         raise HTTPException(status_code=400, detail="QQ 官方机器人必须填写 AppID 和 AppSecret")
-    if next_protocol == "qq_official":
-        if next_mode not in OFFICIAL_MODES:
-            data["connection_mode"] = "official_ws"
-    elif next_mode in OFFICIAL_MODES:
-        # 协议切换回 OneBot / Mock 时不能残留官方专属接入模式。
-        data["connection_mode"] = "ws_client"
-    # 空字符串表示「保持不变」：编辑表单不会回传密钥，避免每次保存都清空凭据。
-    token = data.pop("access_token", None)
-    if token:
-        account.access_token_enc = encrypt_secret(token)
+    if next_mode not in OFFICIAL_MODES:
+        data["connection_mode"] = "official_ws"
+    # 空密钥保留原值，避免编辑时清空有效凭据。
     secret = data.pop("app_secret", None)
     if secret:
         account.app_secret_enc = encrypt_secret(secret)
@@ -279,6 +251,11 @@ async def delete_account(
         raise HTTPException(status_code=404, detail="账号不存在")
     await account_manager.stop(account.id)
     name = account.name
+    target_ids = list(await db.scalars(select(GithubNotificationTarget.id).where(GithubNotificationTarget.account_id == account.id)))
+    if target_ids:
+        await db.execute(update(PushRule).where(PushRule.notification_target_id.in_(target_ids)).values(enabled=False, notification_target_id=None))
+        await db.execute(delete(SystemSetting).where(SystemSetting.key.startswith("github_group_bind:"), SystemSetting.value["target_id"].as_integer().in_(target_ids)))
+        await db.execute(delete(GithubNotificationTarget).where(GithubNotificationTarget.id.in_(target_ids)))
     await db.delete(account)
     await db.commit()
     await audit(
@@ -456,10 +433,11 @@ async def message_stats(
     _: User = Depends(require("message:view")),
 ):
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    day_expr = date_bucket(Message.created_at, db.bind.dialect.name if db.bind is not None else "sqlite")
     rows = await db.execute(
-        select(func.date(Message.created_at), Message.direction, func.count(Message.id))
+        select(day_expr, Message.direction, func.count(Message.id))
         .where(Message.account_id == account_db_id, Message.created_at >= since)
-        .group_by(func.date(Message.created_at), Message.direction)
+        .group_by(day_expr, Message.direction)
     )
     buckets: dict[str, dict[str, int]] = {}
     for day, direction, count in rows.all():

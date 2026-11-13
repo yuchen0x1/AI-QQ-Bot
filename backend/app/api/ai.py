@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require
+from app.api.pagination import PageParam, PageSizeParam
 from app.core.security import decrypt_secret, encrypt_secret, mask_secret
 from app.db.session import get_db
 from app.models import AIMessage, AIModel, AIProvider, AIConversation, AIUsageLog, User
@@ -295,8 +296,8 @@ async def chat(payload: ChatRequest, db: AsyncSession = Depends(get_db), _: User
 
 @router.get("/conversations", response_model=Page[ConversationOut])
 async def list_conversations(
-    page: int = 1,
-    page_size: int = 20,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 20,
     account_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require("ai:view")),
@@ -340,8 +341,8 @@ async def delete_conversation(
 
 @router.get("/usage", response_model=Page[UsageLogOut])
 async def usage_logs(
-    page: int = 1,
-    page_size: int = 20,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 20,
     status: str | None = None,
     model_id: int | None = None,
     days: int = Query(default=7, ge=1, le=90),

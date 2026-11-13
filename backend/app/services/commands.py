@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import AdapterError, AdapterEvent, QQAdapter, UnsupportedAction
-from app.models import Account, BotCommand, Group, GroupMember, GroupSettings, GithubRepository, SystemSetting
+from app.models import Account, BotCommand, Group, GroupMember, GroupSettings, GithubRepository
 
 logger = logging.getLogger("qbot.commands")
 
@@ -116,8 +116,9 @@ BUILTIN_COMMANDS: list[dict[str, Any]] = [
 # 辅助
 # ---------------------------------------------------------------------------
 async def get_setting(db: AsyncSession, key: str, default: Any = None) -> Any:
-    row = await db.scalar(select(SystemSetting).where(SystemSetting.key == key))
-    return row.value.get("value", default) if row else default
+    from app.services.settings_store import read_setting
+
+    return await read_setting(db, key, default)
 
 
 async def resolve_role(db: AsyncSession, account_id: int, event: AdapterEvent, user_id: int) -> str:

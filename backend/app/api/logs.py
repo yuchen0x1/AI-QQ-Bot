@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require
+from app.api.pagination import PageParam, PageSizeParam
 from app.db.session import get_db
 from app.models import SystemLog, User
 from app.schemas.common import MessageOut, Page
@@ -41,8 +42,8 @@ async def categories(_: User = Depends(require("log:view"))):
 
 @router.get("", response_model=Page[LogOut])
 async def list_logs(
-    page: int = 1,
-    page_size: int = 50,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 50,
     category: str | None = None,
     level: str | None = None,
     keyword: str | None = None,

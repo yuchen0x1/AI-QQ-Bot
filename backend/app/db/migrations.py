@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import sqlalchemy as sa
@@ -24,6 +26,32 @@ logger = logging.getLogger("qbot.migrations")
 ALEMBIC_INI = BACKEND_DIR / "alembic.ini"
 MIGRATIONS_DIR = BACKEND_DIR / "migrations"
 VERSION_TABLE = "alembic_version"
+
+# 迁移互斥锁的 advisory lock key（需在 int64 范围内）。backend / worker 等进程
+# 启动时都会执行 upgrade，必须串行，否则并发 DDL 会争抢 alembic_version。
+MIGRATION_LOCK_KEY = 0x51424F54  # "QBOT"
+
+# 进程内串行化：同一进程内并发调用（如测试或多个启动路径同时触发）共用同一把锁，
+# 避免在 SQLite 这种没有 advisory lock 的后端上互相打断。
+_INPROCESS_LOCK = asyncio.Lock()
+
+
+@asynccontextmanager
+async def _migration_lock(target_engine: AsyncEngine) -> AsyncIterator[None]:
+    """串行化并发 schema 升级。
+
+    PostgreSQL 使用事务级 advisory lock：先到者执行 DDL，其余进程阻塞在取锁上，
+    拿到锁后重新检查版本会发现已是 head 并直接返回。其它后端（SQLite）没有跨进程
+    锁，只能靠进程内锁 + 目标库自身的写锁，因此多进程并发升级仍属于不支持的部署
+    形态（本地开发与测试为单进程）。
+    """
+    async with _INPROCESS_LOCK:
+        if target_engine.dialect.name != "postgresql":
+            yield
+            return
+        async with target_engine.begin() as conn:
+            await conn.execute(sa.text("SELECT pg_advisory_xact_lock(:key)"), {"key": MIGRATION_LOCK_KEY})
+            yield
 
 
 class SchemaVersionError(RuntimeError):
@@ -102,28 +130,33 @@ def _assert_version_matches(config: Config, state: SchemaState, head: str) -> bo
 
 
 async def upgrade_schema(database_url: str | None = None) -> str:
-    """校验并升级 schema 到 head，返回 head 版本号。"""
-    config = alembic_config(database_url)
-    head = head_revision(config)
+    """校验并升级 schema 到 head，返回 head 版本号。
+
+    多个启动路径会同时调用本函数，因此整个"检查 + 升级"过程被互斥锁串行化；
+    拿到锁后重新检查版本，后到者直接复用已完成的升级。Alembic 的 Config 对象
+    不是线程/协程安全的，所以必须在锁内构造。
+    """
     temp_engine: AsyncEngine | None = None
     target_engine = default_engine
     if database_url:
         temp_engine = create_async_engine(database_url, poolclass=pool.NullPool)
         target_engine = temp_engine
     try:
-        state = await inspect_schema(target_engine)
-        needs_upgrade = _assert_version_matches(config, state, head)
+        async with _migration_lock(target_engine):
+            config = alembic_config(database_url)
+            head = head_revision(config)
+            state = await inspect_schema(target_engine)
+            needs_upgrade = _assert_version_matches(config, state, head)
+            if not needs_upgrade:
+                logger.info("数据库 schema 已是最新版本 %s", head)
+                return head
+            if state.version:
+                logger.info("数据库 schema 将从 %s 升级到 %s", state.version, head)
+            else:
+                logger.info("数据库 schema 将初始化到 %s", head)
+            # env.py 使用 asyncio.run，必须放到独立线程中执行，避免与外层事件循环冲突。
+            await asyncio.to_thread(command.upgrade, config, "head")
+            return head
     finally:
         if temp_engine is not None:
             await temp_engine.dispose()
-
-    if not needs_upgrade:
-        logger.info("数据库 schema 已是最新版本 %s", head)
-        return head
-    if state.version:
-        logger.info("数据库 schema 将从 %s 升级到 %s", state.version, head)
-    else:
-        logger.info("数据库 schema 将初始化到 %s", head)
-    # env.py 使用 asyncio.run，必须放到独立线程中执行，避免与外层事件循环冲突。
-    await asyncio.to_thread(command.upgrade, config, "head")
-    return head

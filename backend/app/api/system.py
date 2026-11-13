@@ -6,11 +6,14 @@ import platform
 import sys
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require
 from app.core.config import settings
+from app.core.logging import mask_text
+from app.core.version import APP_VERSION
 from app.db.session import get_db
 from app.models import SystemSetting, User
 from app.schemas.task import SettingOut, SystemStats
@@ -39,7 +42,25 @@ async def health():
             await conn.execute(text("SELECT 1"))
     except Exception:  # noqa: BLE001
         db_ok = False
-    return {"status": "ok" if db_ok else "degraded", "database": db_ok, "version": "1.0.0"}
+    payload = {"status": "ok" if db_ok else "degraded", "database": db_ok, "version": APP_VERSION}
+    # 探活端点必须通过 HTTP 状态反映不可用，否则反向代理会把数据库故障实例
+    # 继续放进流量池，只返回一个看似正常的 JSON。
+    return JSONResponse(status_code=200 if db_ok else 503, content=payload)
+
+
+@router.get("/config")
+async def public_config():
+    """登录页也要用的公开配置（无需鉴权，只暴露可公开展示的字段）。"""
+    from app.services.settings_store import read_setting
+    from app.db.session import SessionLocal
+
+    async with SessionLocal() as db:
+        title = await read_setting(db, "panel_title", "")
+    return {
+        "panel_title": str(title or "").strip() or "QBot 控制台",
+        "version": APP_VERSION,
+        "env": settings.env,
+    }
 
 
 @router.get("/info")
@@ -49,7 +70,7 @@ async def info(_: User = Depends(require("system:view"))):
     return {
         "name": settings.app_name,
         "env": settings.env,
-        "version": "1.0.0",
+        "version": APP_VERSION,
         "python": platform.python_version(),
         "platform": f"{platform.system()} {platform.release()}",
         "executable": sys.executable,
@@ -60,6 +81,14 @@ async def info(_: User = Depends(require("system:view"))):
         "timezone": settings.scheduler_timezone,
         "public_base_url": settings.public_base_url,
     }
+
+
+@router.get("/update")
+async def update_info(channel: str | None = None, _: User = Depends(require("system:view"))):
+    """检查 GitHub Releases；网络失败只返回诊断，不阻断管理台。"""
+    from app.services.update_checker import check_for_update
+
+    return await check_for_update(channel)
 
 
 @router.get("/settings", response_model=list[SettingOut])
@@ -81,11 +110,22 @@ async def update_setting(
     row = await db.scalar(select(SystemSetting).where(SystemSetting.key == key))
     if not row:
         raise HTTPException(status_code=404, detail="配置项不存在")
-    row.value = {"value": payload.get("value")}
+    new_value = payload.get("value")
+    # 读取接口对 is_secret 行返回 "******"；若前端原样回传掩码，必须保留旧值，
+    # 不能把掩码字符串当成真实密钥写库（否则下一次使用就会静默失败）。
+    if row.is_secret and isinstance(new_value, str) and set(new_value) == {"*"}:
+        pass
+    else:
+        row.value = {"value": new_value}
     await db.commit()
     await db.refresh(row)
     await audit(
-        db, user_id=user.id, username=user.username, action="update_setting", target=key, detail=str(payload)[:300]
+        db,
+        user_id=user.id,
+        username=user.username,
+        action="update_setting",
+        target=key,
+        detail=mask_text(str(payload))[:300],
     )
     return SettingOut(
         key=row.key,
@@ -118,12 +158,15 @@ async def do_backup(db: AsyncSession = Depends(get_db), user: User = Depends(req
 async def test_alert(payload: dict, _: User = Depends(require("system:manage"))):
     """测试第三方告警推送。"""
     from app.core.http import new_client
-    from app.services.alerting import _build_payload, _detect_channel
+    from app.services.alerting import _build_payload, _detect_channel, validate_webhook_url
 
     url = str(payload.get("webhook_url") or "").strip()
     channel_type = str(payload.get("channel_type") or "auto")
     if not url:
         raise HTTPException(status_code=400, detail="缺少 webhook_url")
+    valid, reason = validate_webhook_url(url)
+    if not valid:
+        raise HTTPException(status_code=400, detail=reason)
 
     channel = _detect_channel(url, channel_type)
     body = _build_payload(channel, "通道连通性测试", "这是一条来自 QBot AI 管理控制台的告警测试消息。如果您收到本条通知，说明系统告警通道配置正常！")

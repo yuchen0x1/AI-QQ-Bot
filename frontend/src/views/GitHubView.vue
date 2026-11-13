@@ -1,7 +1,8 @@
 <template>
   <ResourceView ref="tableRef" :config="config">
     <template #panel>
-      <section class="gh-bind surface" v-loading="statusLoading">
+      <GithubNotifications :identity="status" @connected="loadStatus" @changed="tableRef?.load()" />
+      <section v-if="status?.configured || status?.connected" class="gh-bind surface" v-loading="statusLoading">
         <div class="gh-left">
           <div class="gh-mark" :class="{ on: status?.connected }">
             <el-icon><Connection /></el-icon>
@@ -131,10 +132,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, Download, Refresh, Search } from '@element-plus/icons-vue'
 import { api } from '../api'
 import ResourceView from '../components/ResourceView.vue'
+import GithubNotifications from '../components/GithubNotifications.vue'
+import { useAutoRefresh } from '../composables/useAutoRefresh'
 
 const route = useRoute()
 const router = useRouter()
 const tableRef = ref<any>()
+useAutoRefresh(async () => { await tableRef.value?.load() })
 const statusLoading = ref(false)
 const binding = ref(false)
 const status = ref<any>(null)
@@ -164,9 +168,9 @@ const filtered = computed(() => {
 })
 
 const config = {
-  kicker: 'RELEASE TRACKER',
+  kicker: 'PROJECT ACTIVITY',
   title: 'GitHub 仓库监控',
-  description: '跟踪 Release 与版本更新，支持 Webhook 实时事件和定时轮询；绑定 GitHub 账号后可一键导入你的仓库',
+  description: '把代码提交、版本发布、PR、Issue 与评论统一推送到通知群；下面可管理已接入的仓库',
   endpoint: '/github/repos',
   itemName: '仓库',
   nameKey: 'full_name',
@@ -181,6 +185,7 @@ const config = {
     { key: 'last_checked_at', label: '上次检查', type: 'date', width: 160 },
     { key: 'owner_username', label: '添加者', width: 100 },
     { key: 'monitor_enabled', label: '监控状态', type: 'bool', width: 95 },
+    { key: 'monitor_activity', label: '全部动态', type: 'bool', width: 95 },
   ],
   createLabel: '添加仓库',
   extraCreateLabel: '从 GitHub 导入',
@@ -262,8 +267,14 @@ async function openImport() {
 async function loadGithubRepos() {
   reposLoading.value = true
   try {
-    const { data } = await api.get('/github/oauth/repos')
-    githubRepos.value = data.items || []
+    const all = []
+    for (let page = 1; page <= 50; page++) {
+      const { data } = await api.get('/github/oauth/repos', { params: { page } })
+      all.push(...(data.items || []))
+      if (!data.has_more) break
+      if (page === 50) ElMessage.warning('已达到 5000 个仓库的读取上限')
+    }
+    githubRepos.value = all
   } finally {
     reposLoading.value = false
   }

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import AdapterError, UnsupportedAction
 from app.api.deps import client_ip, require
+from app.api.pagination import PageParam, PageSizeParam
 from app.db.session import get_db
 from app.models import Account, Group, GroupMember, GroupSettings, User
 from app.schemas.account import (
@@ -21,6 +22,7 @@ from app.schemas.account import (
 from app.schemas.common import MessageOut, Page
 from app.services.account_manager import account_manager
 from app.services.logs import audit, write_log
+from app.services.group_display import display_name, display_number
 
 router = APIRouter(prefix="/groups", tags=["群聊"])
 
@@ -42,7 +44,7 @@ async def ensure_settings(db: AsyncSession, group: Group) -> GroupSettings:
     return settings
 
 
-def serialize_group(group: Group, account_name: str | None = None) -> GroupOut:
+def serialize_group(group: Group, account_name: str | None = None, protocol: str | None = None) -> GroupOut:
     return GroupOut(
         id=group.id,
         account_id=group.account_id,
@@ -54,31 +56,34 @@ def serialize_group(group: Group, account_name: str | None = None) -> GroupOut:
         last_synced_at=group.last_synced_at,
         settings=GroupSettingsOut.model_validate(group.settings) if group.settings else None,
         account_name=account_name,
+        display_number=display_number(group, protocol),
+        display_name=display_name(group, protocol),
     )
 
 
 @router.get("", response_model=Page[GroupOut])
 async def list_groups(
-    page: int = 1,
-    page_size: int = 20,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 20,
     account_id: int | None = None,
     keyword: str | None = None,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require("group:view")),
 ):
-    query = select(Group)
+    query = select(Group).where(Group.account_id.in_(select(Account.id).where(Account.protocol == "qq_official")))
     if account_id:
         query = query.where(Group.account_id == account_id)
     if keyword:
-        condition = Group.name.ilike(f"%{keyword}%")
+        condition = Group.name.ilike(f"%{keyword}%") | Group.display_number.ilike(f"%{keyword}%")
         if keyword.isdigit():
             condition = condition | (Group.group_number == int(keyword))
         query = query.where(condition)
     total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await db.scalars(query.order_by(Group.id.desc()).offset((page - 1) * page_size).limit(page_size)))
-    accounts = {a.id: a.name for a in await db.scalars(select(Account))}
+    accounts = {a.id: a for a in await db.scalars(select(Account))}
     return Page(
-        items=[serialize_group(g, accounts.get(g.account_id)) for g in rows], total=total, page=page, page_size=page_size
+        items=[serialize_group(g, accounts[g.account_id].name if g.account_id in accounts else None,
+                               accounts[g.account_id].protocol if g.account_id in accounts else None) for g in rows], total=total, page=page, page_size=page_size
     )
 
 
@@ -86,7 +91,7 @@ async def list_groups(
 async def get_group(group_db_id: int, db: AsyncSession = Depends(get_db), _: User = Depends(require("group:view"))):
     group = await _get_group(db, group_db_id)
     account = await db.get(Account, group.account_id)
-    return serialize_group(group, account.name if account else None)
+    return serialize_group(group, account.name if account else None, account.protocol if account else None)
 
 
 @router.put("/{group_db_id}/settings", response_model=GroupSettingsOut)
@@ -118,8 +123,8 @@ async def update_group_settings(
 @router.get("/{group_db_id}/members", response_model=Page[GroupMemberOut])
 async def list_members(
     group_db_id: int,
-    page: int = 1,
-    page_size: int = 50,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 50,
     keyword: str | None = None,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require("group:view")),

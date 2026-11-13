@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import httpx
 
+from app.core.version import APP_VERSION
+
 
 async def test_health_check_task(client: httpx.AsyncClient, admin_headers: dict):
     created = await client.post(
@@ -133,4 +135,4 @@ async def test_system_settings_and_logs(client: httpx.AsyncClient, admin_headers
 
     info = await client.get("/api/system/info", headers=admin_headers)
     assert info.status_code == 200
-    assert info.json()["version"] == "1.0.0"
+    assert info.json()["version"] == APP_VERSION

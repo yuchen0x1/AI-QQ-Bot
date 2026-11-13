@@ -152,10 +152,27 @@ async def _task_ai_summary(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _task_backup(payload: dict[str, Any]) -> dict[str, Any]:
-    from app.services.backup import backup_database
+    """备份数据库并按保留份数清理旧备份。
+
+    手动备份接口会 prune，但定时备份之前不会，长期运行后 backups/ 会无限增长
+    （每个 SQLite/PostgreSQL 备份都是完整快照）。保留份数取 payload.keep，
+    其次读系统设置 auto_backup_keep，默认 14。
+    """
+    from app.services.backup import backup_database, prune_backups
+    from app.services.settings_store import read_setting
+
+    keep = payload.get("keep")
+    if not keep:
+        async with SessionLocal() as db:
+            keep = await read_setting(db, "auto_backup_keep", None)
+    try:
+        keep = max(1, int(keep or 14))
+    except (TypeError, ValueError):
+        keep = 14
 
     path = await backup_database()
-    return {"backup": str(path)}
+    removed = prune_backups(keep=keep)
+    return {"backup": str(path), "pruned": removed, "keep": keep}
 
 
 async def _task_push_retry(payload: dict[str, Any]) -> dict[str, Any]:
@@ -167,16 +184,33 @@ async def _task_push_retry(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _task_clean_expired_data(payload: dict[str, Any]) -> dict[str, Any]:
-    """定时清理过期的消息、系统日志、任务执行记录及 AI 调用统计。"""
-    from sqlalchemy import delete
-    from app.models import Message, SystemLog, TaskRecord, AIUsageLog, SystemSetting
+    """定时清理过期数据：消息、日志、任务记录、AI 用量、登录会话、审计、GitHub 事件、推送记录。"""
+    from sqlalchemy import delete, or_
+    from app.models import (
+        AIConversation,
+        AIUsageLog,
+        AuditLog,
+        AuthSession,
+        GithubEvent,
+        LoginAttempt,
+        Message,
+        PushRecord,
+        SystemLog,
+        TaskRecord,
+    )
 
     async with SessionLocal() as db:
+        # 注意用 is None 判断：days=0 表示"关闭清理"，若用 `if not days`
+        # 会把 0 当成未传值再回退到系统设置，导致关闭选项永远不生效。
+        from app.services.settings_store import read_setting
+
         days = payload.get("days")
-        if not days:
-            setting = await db.scalar(select(SystemSetting).where(SystemSetting.key == "data_retention_days"))
-            days = (setting.value or {}).get("value") if setting else 30
-        days = int(days or 30)
+        if days is None:
+            days = await read_setting(db, "data_retention_days", 30)
+        try:
+            days = int(days) if days is not None else 30
+        except (TypeError, ValueError):
+            days = 30
         if days <= 0:
             return {"status": "skipped", "reason": "retention disabled (days <= 0)"}
 
@@ -185,6 +219,29 @@ async def _task_clean_expired_data(payload: dict[str, Any]) -> dict[str, Any]:
         log_res = await db.execute(delete(SystemLog).where(SystemLog.created_at < cutoff))
         task_res = await db.execute(delete(TaskRecord).where(TaskRecord.started_at < cutoff))
         ai_res = await db.execute(delete(AIUsageLog).where(AIUsageLog.created_at < cutoff))
+
+        # 认证与审计、GitHub 事件、推送记录同样会无限增长，之前完全没清理。
+        # 这些表的写入量不高但长期运行仍会拖慢查询，纳入同一保留周期。
+        session_res = await db.execute(
+            delete(AuthSession).where(
+                or_(AuthSession.expires_at < cutoff, AuthSession.revoked_at.isnot(None) & (AuthSession.revoked_at < cutoff))
+            )
+        )
+        attempt_res = await db.execute(delete(LoginAttempt).where(LoginAttempt.created_at < cutoff))
+        audit_res = await db.execute(delete(AuditLog).where(AuditLog.created_at < cutoff))
+        github_event_res = await db.execute(delete(GithubEvent).where(GithubEvent.created_at < cutoff))
+        push_res = await db.execute(
+            delete(PushRecord).where(PushRecord.created_at < cutoff, PushRecord.status != "pending")
+        )
+        # AI 会话按最后活跃时间清理；last_active_at 可能为空，回退到创建时间。
+        conversation_res = await db.execute(
+            delete(AIConversation).where(
+                or_(
+                    AIConversation.last_active_at < cutoff,
+                    AIConversation.last_active_at.is_(None) & (AIConversation.created_at < cutoff),
+                )
+            )
+        )
         await db.commit()
 
         deleted = {
@@ -192,13 +249,25 @@ async def _task_clean_expired_data(payload: dict[str, Any]) -> dict[str, Any]:
             "logs": log_res.rowcount or 0,
             "task_records": task_res.rowcount or 0,
             "ai_usage_logs": ai_res.rowcount or 0,
+            "auth_sessions": session_res.rowcount or 0,
+            "login_attempts": attempt_res.rowcount or 0,
+            "audit_logs": audit_res.rowcount or 0,
+            "github_events": github_event_res.rowcount or 0,
+            "push_records": push_res.rowcount or 0,
+            "ai_conversations": conversation_res.rowcount or 0,
             "days": days,
         }
         await write_log(
             db,
             level="INFO",
             category="task",
-            message=f"历史数据清理完成（保留 {days} 天）：删除消息 {deleted['messages']} 条，日志 {deleted['logs']} 条，任务记录 {deleted['task_records']} 条",
+            message=(
+                f"历史数据清理完成（保留 {days} 天）：消息 {deleted['messages']}，日志 {deleted['logs']}，"
+                f"任务记录 {deleted['task_records']}，AI 调用 {deleted['ai_usage_logs']}，"
+                f"登录会话 {deleted['auth_sessions']}，登录记录 {deleted['login_attempts']}，"
+                f"审计 {deleted['audit_logs']}，GitHub 事件 {deleted['github_events']}，"
+                f"推送记录 {deleted['push_records']}，AI 会话 {deleted['ai_conversations']}"
+            ),
         )
         return deleted
 
@@ -215,6 +284,12 @@ TASK_HANDLERS: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] 
     "push_retry": _task_push_retry,
     "clean_expired_data": _task_clean_expired_data,
 }
+
+# 需要机器人 adapter 才能完成的任务。它们只能在持有连接的进程内执行，
+# 不能经 Redis 队列投递给 worker（worker 没有 adapter）。
+CONNECTION_BOUND_TASKS: frozenset[str] = frozenset(
+    {"group_message", "group_announcement", "ai_summary", "online_check", "push_retry", "github_check", "github_check_all"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -250,12 +325,23 @@ class SchedulerService:
     async def reload(self) -> None:
         async with SessionLocal() as db:
             tasks = list(await db.scalars(select(ScheduledTask)))
-            repos = list(await db.scalars(select(GithubRepository).where(GithubRepository.monitor_enabled.is_(True))))
+            repos = list(await db.scalars(select(GithubRepository).where(GithubRepository.monitor_enabled.is_(True), GithubRepository.remote_available.is_(True))))
         for task in tasks:
             self.schedule_task(task)
         for repo in repos:
             self.schedule_repo_poll(repo)
+        from app.services.github.automation import tick_subscriptions
+
+        self.scheduler.add_job(tick_subscriptions, "interval", seconds=60, id="github:subscriptions", replace_existing=True,
+                               next_run_time=datetime.now(timezone.utc), max_instances=1, coalesce=True)
+        from app.services.email_alerts import dispatch_email_alerts
+        self.scheduler.add_job(dispatch_email_alerts, "interval", seconds=30, id="system:email-alerts", replace_existing=True,
+                               max_instances=1, coalesce=True)
         logger.info("调度任务已重载：%s 个自定义任务，%s 个仓库轮询", len(tasks), len(repos))
+
+    def request_activity_sync(self) -> None:
+        if self.running and self.scheduler.get_job("github:subscriptions"):
+            self.scheduler.modify_job("github:subscriptions", next_run_time=datetime.now(timezone.utc))
 
     # ------------------------------------------------------------------
     def _add(self, job_id: str, func: Callable, trigger, kwargs: dict[str, Any] | None = None) -> None:
@@ -293,7 +379,7 @@ class SchedulerService:
 
     def schedule_repo_poll(self, repo: GithubRepository, *, replace: bool = True) -> None:
         job_id = f"repo:{repo.id}"
-        if not repo.monitor_enabled:
+        if not repo.monitor_enabled or not repo.remote_available:
             if self.scheduler.get_job(job_id):
                 self.scheduler.remove_job(job_id)
             return
@@ -324,15 +410,18 @@ class SchedulerService:
         async with lock:
             async with SessionLocal() as db:
                 repo = await db.get(GithubRepository, repo_id)
-                if not repo or not repo.monitor_enabled:
+                if not repo or not repo.monitor_enabled or not repo.remote_available:
                     return
                 try:
+                    previous_interval = repo.poll_interval_seconds
                     await check_repository(db, repo)
+                    if repo.poll_interval_seconds != previous_interval:
+                        self.schedule_repo_poll(repo)
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("仓库轮询失败: %s", exc)
 
     async def _execute_job(self, task_id: int) -> None:
-        if redis_task_queue.enabled:
+        if redis_task_queue.enabled and await self._task_can_go_to_queue(task_id):
             try:
                 await redis_task_queue.enqueue(task_id, trigger="schedule")
                 return
@@ -340,6 +429,56 @@ class SchedulerService:
                 # Redis is optional: a broker outage must not drop scheduled work.
                 logger.warning("Redis 任务队列不可用，回退本地执行：%s", exc)
         await self.execute_task(task_id, trigger="schedule")
+
+    async def _task_can_go_to_queue(self, task_id: int) -> bool:
+        """只有不需要机器人 adapter 的任务才能投递给 worker。
+
+        worker 进程不持有 ``account_manager`` 的任何运行时，发送类任务入队后必定
+        以"账号不在线"失败。这类任务必须留在持有连接的进程内执行。
+        """
+        async with SessionLocal() as db:
+            task = await db.get(ScheduledTask, task_id)
+            if not task:
+                return False
+            task_type = task.task_type
+        if task_type in CONNECTION_BOUND_TASKS:
+            logger.info("任务 %s 类型 %s 依赖机器人连接，跳过队列、本地执行", task_id, task_type)
+            return False
+        return True
+
+    async def record_skipped(self, task_id: int, *, reason: str, trigger: str = "queue") -> TaskRecord | None:
+        """把被消费者主动跳过的任务落一条 failed 记录，避免任务看起来从未运行。"""
+        async with SessionLocal() as db:
+            task = await db.get(ScheduledTask, task_id)
+            if not task:
+                return None
+            now = datetime.now(timezone.utc)
+            record = TaskRecord(
+                task_id=task.id,
+                task_name=task.name,
+                trigger=trigger,
+                status="failed",
+                error=reason[:1000],
+                started_at=now,
+                finished_at=now,
+                duration_ms=0,
+            )
+            db.add(record)
+            task.last_run_at = now
+            task.last_status = "failed"
+            task.last_error = reason[:1000]
+            task.total_runs += 1
+            task.total_failures += 1
+            await db.commit()
+            await db.refresh(record)
+            await write_log(
+                db,
+                level="ERROR",
+                category="task",
+                message=f"任务「{task.name}」被跳过：{reason}",
+                context={"task_id": task.id, "type": task.task_type},
+            )
+            return record
 
     async def execute_task(self, task_id: int, *, trigger: str = "manual") -> TaskRecord:
         lock = self._locks.setdefault(f"task:{task_id}", asyncio.Lock())

@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require
+from app.api.pagination import PageParam, PageSizeParam
 from app.db.session import get_db
 from app.models import ScheduledTask, TaskRecord, User
 from app.schemas.common import MessageOut, Page
@@ -35,8 +36,8 @@ async def task_types(_: User = Depends(require("task:view"))):
 
 @router.get("", response_model=Page[TaskOut])
 async def list_tasks(
-    page: int = 1,
-    page_size: int = 20,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 20,
     keyword: str | None = None,
     enabled: bool | None = None,
     db: AsyncSession = Depends(get_db),
@@ -154,8 +155,8 @@ async def run_task(task_id: int, db: AsyncSession = Depends(get_db), _: User = D
 
 @router.get("/records", response_model=Page[TaskRecordOut])
 async def list_records(
-    page: int = 1,
-    page_size: int = 20,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 20,
     task_id: int | None = None,
     status: str | None = None,
     db: AsyncSession = Depends(get_db),

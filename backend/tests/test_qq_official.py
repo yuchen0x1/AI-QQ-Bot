@@ -74,8 +74,8 @@ def c2c_payload(msg_id: str = "ROBOT1.0_c2c_in", event_id: str = "evt-c2c-1") ->
 async def create_temp_account(client, admin_headers, **overrides) -> dict:
     payload = {
         "name": "官方适配器单测账号",
-        "protocol": "mock",
-        "connection_mode": "http",
+        "protocol": "qq_official", "app_id": "999000001", "app_secret": "unit-fixture-secret",
+        "connection_mode": "official_ws",
         **overrides,
     }
     response = await client.post("/api/accounts", headers=admin_headers, json=payload)
@@ -229,6 +229,51 @@ async def test_proactive_disabled_and_unknown_target(client, admin_headers):
             await adapter.send_private_message(999999999, "未知用户")
         await adapter.disconnect()
     finally:
+        await client.delete(f"/api/accounts/{account['id']}", headers=admin_headers)
+
+
+async def test_proactive_probe_does_not_use_recent_passive_reply(client, admin_headers):
+    account = await create_temp_account(client, admin_headers)
+    adapter = make_adapter(account["id"])
+    try:
+        await adapter.feed_event(group_payload())
+        event = await take_event(adapter)
+        bodies = []
+
+        async def fake_request(method, path, *, json_body=None, **kwargs):
+            bodies.append(json_body)
+            return {"id": "ROBOT1.0_proactive_test"}
+
+        adapter._request = fake_request
+        await adapter.send_proactive_group_message(event.group_id, "主动通知")
+        assert bodies == [{"msg_type": 0, "content": "主动通知"}]
+        # Testing proactive capability must leave the real reply quota untouched.
+        await adapter.send_group_message(event.group_id, "回复")
+        assert bodies[1]["msg_id"] == "ROBOT1.0_group_in"
+        assert bodies[1]["msg_seq"] == 1
+    finally:
+        await adapter.disconnect()
+        await client.delete(f"/api/accounts/{account['id']}", headers=admin_headers)
+
+
+async def test_group_permission_and_missing_message_ack(client, admin_headers):
+    account = await create_temp_account(client, admin_headers)
+    adapter = make_adapter(account["id"])
+    try:
+        group_id = await adapter._resolve("group", GROUP_OPENID)
+
+        async def fake_request(method, path, **kwargs):
+            assert method == "GET" and path.endswith("/bot_state")
+            return {"allow_proactive_msg": False, "member_openid": "not-for-client"}
+
+        adapter._request = fake_request
+        result = await adapter.get_group_bot_state(group_id)
+        assert result["allow_proactive_msg"] is False
+        assert "member_openid" not in result
+        with pytest.raises(AdapterError, match="消息 ID"):
+            adapter._format_send_result({}, "group", group_id, GROUP_OPENID)
+    finally:
+        await adapter.disconnect()
         await client.delete(f"/api/accounts/{account['id']}", headers=admin_headers)
 
 

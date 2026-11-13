@@ -40,6 +40,7 @@ class GithubRepository(Base, TimestampMixin):
     token_enc: Mapped[str | None] = mapped_column(Text)
     webhook_secret_enc: Mapped[str | None] = mapped_column(Text)
     monitor_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    remote_available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, server_default="1")
     poll_interval_seconds: Mapped[int] = mapped_column(Integer, default=900, nullable=False)
     notify_prerelease: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -48,6 +49,9 @@ class GithubRepository(Base, TimestampMixin):
     last_release_tag: Mapped[str | None] = mapped_column(String(128))
     last_release_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_webhook_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    monitor_activity: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    activity_cursor: Mapped[str | None] = mapped_column(String(96))
+    activity_initialized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     releases: Mapped[list["GithubRelease"]] = relationship(back_populates="repository", cascade="all, delete-orphan")
     rules: Mapped[list["PushRule"]] = relationship(back_populates="repository", cascade="all, delete-orphan")
@@ -97,6 +101,7 @@ class GithubEvent(Base, TimestampMixin):
 
 class PushRule(Base, TimestampMixin):
     __tablename__ = "push_rules"
+    __table_args__ = (UniqueConstraint("repository_id", "notification_target_id", name="uq_push_rule_notification_target"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     repository_id: Mapped[int] = mapped_column(
@@ -111,6 +116,9 @@ class PushRule(Base, TimestampMixin):
     ai_summary: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     mention_user_ids: Mapped[list[int]] = mapped_column(JSON, default=list, nullable=False)
     template: Mapped[str | None] = mapped_column(Text)
+    event_types: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["release"], nullable=False)
+    managed_by_user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    notification_target_id: Mapped[int | None] = mapped_column(ForeignKey("github_notification_targets.id", ondelete="SET NULL"), index=True)
     last_pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     total_pushed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
@@ -119,16 +127,20 @@ class PushRule(Base, TimestampMixin):
 
 class PushRecord(Base, TimestampMixin):
     __tablename__ = "push_records"
-    __table_args__ = (UniqueConstraint("rule_id", "release_id", name="uq_push_rule_release"),)
+    __table_args__ = (
+        UniqueConstraint("rule_id", "release_id", name="uq_push_rule_release"),
+        UniqueConstraint("rule_id", "event_id", name="uq_push_rule_event"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     repository_id: Mapped[int] = mapped_column(
         ForeignKey("github_repositories.id", ondelete="CASCADE"), index=True, nullable=False
     )
     rule_id: Mapped[int] = mapped_column(ForeignKey("push_rules.id", ondelete="CASCADE"), index=True, nullable=False)
-    release_id: Mapped[int] = mapped_column(
-        ForeignKey("github_releases.id", ondelete="CASCADE"), index=True, nullable=False
+    release_id: Mapped[int | None] = mapped_column(
+        ForeignKey("github_releases.id", ondelete="CASCADE"), index=True, nullable=True
     )
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("github_events.id", ondelete="CASCADE"), index=True)
     release_tag: Mapped[str | None] = mapped_column(String(128))
     account_id: Mapped[int] = mapped_column(Integer, nullable=False)
     qq_group: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -138,6 +150,18 @@ class PushRecord(Base, TimestampMixin):
     retries: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     message_id: Mapped[int | None] = mapped_column(BigInteger)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GithubNotificationTarget(Base, TimestampMixin):
+    __tablename__ = "github_notification_targets"
+    __table_args__ = (UniqueConstraint("user_id", "account_id", "group_label", name="uq_notification_target_user_account_group"), {"sqlite_autoincrement": True})
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    group_label: Mapped[str] = mapped_column(String(80), nullable=False)
+    qq_group: Mapped[int | None] = mapped_column(BigInteger)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class UserGithubToken(Base, TimestampMixin):

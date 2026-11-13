@@ -18,15 +18,38 @@ from app.core.config import settings
 # --------------------------------------------------------------------------
 # 密码
 # --------------------------------------------------------------------------
+# bcrypt 的输入上限是 72 字节（bcrypt 5.x 超长直接抛 ValueError，4.x 静默截断）。
+# 中文密码 24 个字符就会超限，因此先做一次 SHA-256 预哈希再交给 bcrypt：
+# 输出是固定长度、字母数字组成的字符串，既避开 72 字节限制，也没有 null 字节问题。
+# 预哈希带版本前缀，将来更换算法时可以平滑迁移。
+_BCRYPT_PREFIX = "sha256:"
+
+
+def _bcrypt_input(password: str) -> bytes:
+    digest = hashlib.sha256(password.encode("utf-8")).digest()
+    return base64.b64encode(digest)
+
+
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+    return _BCRYPT_PREFIX + bcrypt.hashpw(_bcrypt_input(password), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
 def verify_password(password: str, hashed: str) -> bool:
+    if not hashed:
+        return False
     try:
-        return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+        if hashed.startswith(_BCRYPT_PREFIX):
+            return bcrypt.checkpw(_bcrypt_input(password), hashed[len(_BCRYPT_PREFIX):].encode("utf-8"))
+        # 兼容升级前的历史哈希：bcrypt 4.x 对超过 72 字节的输入静默截断，5.x 则直接抛
+        # ValueError。这里显式截断，保证老用户（尤其是中文长密码）不会因升级被锁在门外。
+        return bcrypt.checkpw(password.encode("utf-8")[:72], hashed.encode("utf-8"))
     except (ValueError, TypeError):
         return False
+
+
+def password_needs_rehash(hashed: str) -> bool:
+    """判断哈希是否为旧格式（未经过 SHA-256 预哈希），用于登录成功后原地升级。"""
+    return not (hashed or "").startswith(_BCRYPT_PREFIX)
 
 
 # --------------------------------------------------------------------------

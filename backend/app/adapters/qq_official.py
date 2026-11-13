@@ -1,6 +1,6 @@
 """QQ 官方机器人开放平台适配器（bot.qq.com / OpenAPI v2）。
 
-与 OneBot v11 的本质区别，全部收敛在本文件内：
+官方接入、身份映射与能力约束统一在本文件实现：
 
 1. 登录方式：不再扫码登录个人 QQ 号，改用开放平台 AppID + AppSecret 换取
    AppAccessToken，因此不存在「模拟客户端登录」导致的风控问题。
@@ -109,7 +109,7 @@ ERROR_HINTS: dict[int, str] = {
     40034024: "msg_id 无效或不属于当前机器人",
     40034100: "主动消息触发频控（Bot 60/30 QPM、单关系 20 QPM、每群每天 1000 条）",
     40034101: "机器人不是群成员，请先把机器人拉进群",
-    40034105: "无主动消息权限：请确认机器人已上线、已通过审核，并在手机 QQ 机器人资料页开启主动消息",
+    40034105: "主动消息被拒绝，请检查目标 QQ 群是否开启「允许主动发送／主动推送」；绑定回复成功与主动通知权限不同，可在通知群卡片检查群权限",
     40034128: "被动回复时间或次数超限（群 5 次 / 单聊 4 次）",
     40054002: "机器人被禁言",
     40054003: "机器人不是群成员",
@@ -880,6 +880,18 @@ class QQOfficialAdapter(QQAdapter):
             for row in rows
         ]
 
+    async def get_group_bot_state(self, group_id: int) -> dict[str, Any]:
+        """Read QQ's group permission; a local option cannot enable it."""
+        openid = await self._lookup("group", group_id)
+        if not openid:
+            raise AdapterError("未找到该群的 OpenID，请先完成群内绑定")
+        data = await self._request("GET", f"/v2/groups/{quote(openid, safe='')}/bot_state")
+        allowed = data.get("allow_proactive_msg")
+        return {
+            "allow_proactive_msg": allowed if isinstance(allowed, bool) else None,
+            "recv_msg_setting": data.get("recv_msg_setting"),
+        }
+
     # ------------------------------------------------------------------
     # 消息发送
     # ------------------------------------------------------------------
@@ -887,6 +899,8 @@ class QQOfficialAdapter(QQAdapter):
         self, data: dict[str, Any], kind: str, target_id: int, target_openid: str
     ) -> dict[str, Any]:
         raw_id = str(data.get("id") or "")
+        if not raw_id:
+            raise AdapterError("QQ 未返回消息 ID，无法确认投递成功")
         numeric = qq_identity.stable_int(raw_id) if raw_id else None
         if numeric is not None:
             self._sent_messages[numeric] = (kind, target_openid, raw_id)
@@ -907,6 +921,7 @@ class QQOfficialAdapter(QQAdapter):
         *,
         markdown: dict[str, Any] | None = None,
         keyboard: dict[str, Any] | None = None,
+        proactive_only: bool = False,
     ) -> dict[str, Any]:
         openid = await self._lookup(kind, target_id)
         if not openid:
@@ -932,14 +947,13 @@ class QQOfficialAdapter(QQAdapter):
             body["msg_type"] = 0
             body["content"] = safe_content
 
-        window = self._reply_windows.get((kind, target_id))
+        window = None if proactive_only else self._reply_windows.get((kind, target_id))
         passive = window.take() if window else None
         if passive:
             body.update(passive)
         elif not self.allow_proactive:
             raise AdapterError(
-                "当前账号未启用主动消息：官方平台只允许在收到消息后 5 分钟内被动回复，"
-                "如需定时推送 / GitHub 通知请在账号设置中开启「允许主动消息」并确认机器人已获得主动消息权限"
+                "当前账号已关闭主动消息尝试。群被动回复有时限，定时通知需要平台允许的主动发送能力；开启本地开关不会授予平台权限"
             )
         try:
             data = await self._request("POST", path, json_body=body)
@@ -972,6 +986,10 @@ class QQOfficialAdapter(QQAdapter):
         keyboard: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return await self._send_message("group", group_id, message, markdown=markdown, keyboard=keyboard)
+
+    async def send_proactive_group_message(self, group_id: int, message: str) -> dict[str, Any]:
+        """Probe the same no-inbound-message path used by unattended notifications."""
+        return await self._send_message("group", group_id, message, proactive_only=True)
 
     # ------------------------------------------------------------------
     # 官方平台不支持的群管理动作：明确报错，绝不假装成功

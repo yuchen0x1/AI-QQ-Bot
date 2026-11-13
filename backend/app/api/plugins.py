@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require
@@ -18,13 +18,13 @@ router = APIRouter(prefix="/plugins", tags=["插件"])
 
 
 async def serialize(db: AsyncSession, plugin: Plugin) -> PluginOut:
-    bindings = await db.scalar(
-        select(PluginBinding).where(PluginBinding.plugin_id == plugin.id).limit(1)
-    )
     data = PluginOut.model_validate(plugin)
-    count = len(list(await db.scalars(select(PluginBinding).where(PluginBinding.plugin_id == plugin.id))))
-    data.binding_count = count
-    _ = bindings
+    data.binding_count = int(
+        await db.scalar(
+            select(func.count()).select_from(PluginBinding).where(PluginBinding.plugin_id == plugin.id)
+        )
+        or 0
+    )
     return data
 
 

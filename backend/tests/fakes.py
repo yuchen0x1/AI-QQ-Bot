@@ -1,8 +1,4 @@
-"""模拟适配器：用于本地演示与自动化测试，不连接任何真实 QQ。
-
-设计原则：行为真实可断言（有状态、有返回值、可注入事件），
-但在界面上必须标识为“模拟”，不得冒充真实平台已连接。
-"""
+"""In-memory test double. Never imported by the application or shipped in its runtime image."""
 
 from __future__ import annotations
 
@@ -15,8 +11,8 @@ from typing import Any
 from app.adapters.base import AdapterError, AdapterEvent, LoginInfo, QQAdapter
 
 
-class MockAdapter(QQAdapter):
-    protocol = "mock"
+class FakeOfficialAdapter(QQAdapter):
+    protocol = "qq_official"
 
     def __init__(self, self_id: int = 10000, nickname: str = "模拟机器人", *, fail_connect: bool = False) -> None:
         super().__init__()
@@ -242,3 +238,13 @@ class MockAdapter(QQAdapter):
             {"type": "friend", "flag": flag, "approve": approve, "remark": remark}
         )
         return self._ok()
+
+
+    async def send_proactive_group_message(self, group_id: int, message: str) -> dict[str, Any]:
+        return await self.send_group_message(group_id, message)
+
+    async def get_group_bot_state(self, group_id: int) -> dict[str, Any]:
+        return {"allow_proactive_msg": True}
+
+    async def probe(self) -> dict[str, Any]:
+        return {"sandbox": False, "callback_mode": "websocket", "gateway": "wss://fixture.invalid"}

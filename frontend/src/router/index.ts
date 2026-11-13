@@ -18,6 +18,8 @@ const router = createRouter({
     { path: '/logs', component: () => import('../views/LogsView.vue'), meta: { title: '系统日志', icon: 'Document', permission: 'log:view' } },
     { path: '/system', component: () => import('../views/SystemView.vue'), meta: { title: '系统监控', icon: 'Monitor', permission: 'system:view' } },
     { path: '/settings', component: () => import('../views/SettingsView.vue'), meta: { title: '系统设置', icon: 'Setting' } },
+    { path: '/email', component: () => import('../views/EmailView.vue'), meta: { title: '邮件告警', icon: 'Message', permission: 'system:manage' } },
+    { path: '/help', component: () => import('../views/HelpView.vue'), meta: { title: '新手指引与文档', icon: 'Reading' } },
   ],
 })
 

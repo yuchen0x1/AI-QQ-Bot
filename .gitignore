@@ -27,3 +27,5 @@ pytest_out.txt
 .workbuddy/
 napcat/
 .screenshots/
+backend/data/
+.evolution/

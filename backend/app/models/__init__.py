@@ -20,6 +20,7 @@ from app.models.base import Base, utcnow
 from app.models.request import BotRequest
 from app.models.github import (
     GithubEvent,
+    GithubNotificationTarget,
     GithubRelease,
     GithubRepository,
     PushRecord,
@@ -37,9 +38,11 @@ from app.models.task import (
     TaskRecord,
 )
 from app.models.user import AuditLog, AuthSession, Role, User
+from app.models.email_alert import EmailAlert
 
 __all__ = [
     "Base",
+    "EmailAlert",
     "utcnow",
     "User",
     "Role",
@@ -60,6 +63,7 @@ __all__ = [
     "GithubRepository",
     "GithubRelease",
     "GithubEvent",
+    "GithubNotificationTarget",
     "PushRule",
     "PushRecord",
     "UserGithubToken",

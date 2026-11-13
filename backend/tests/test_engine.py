@@ -7,7 +7,6 @@ import httpx
 from sqlalchemy import select
 
 from app.adapters.base import AdapterEvent
-from app.adapters.onebot11 import OneBot11Adapter
 from app.models import Account, BotRequest, Group, Message
 from app.services.account_manager import account_manager
 from app.services.bot_engine import engine
@@ -113,81 +112,13 @@ async def test_plugin_command(client: httpx.AsyncClient, admin_headers: dict[str
     assert replies and replies[0].startswith("🎲")
 
 
-def test_onebot_request_events_keep_request_type_separate_from_sub_type():
-    group_event = OneBot11Adapter.parse_event(
-        {
-            "post_type": "request",
-            "request_type": "group",
-            "sub_type": "add",
-            "flag": "group-flag-1",
-            "user_id": 32123,
-            "group_id": GROUP_NUMBER,
-        }
-    )
-    friend_event = OneBot11Adapter.parse_event(
-        {"post_type": "request", "request_type": "friend", "sub_type": "add", "flag": "friend-flag-1", "user_id": 32124}
-    )
-    invite_event = OneBot11Adapter.parse_event(
-        {
-            "post_type": "request",
-            "request_type": "group",
-            "sub_type": "invite",
-            "flag": "group-flag-2",
-            "user_id": 32125,
-            "group_id": GROUP_NUMBER,
-        }
-    )
-
-    assert group_event and group_event.post_type == "request" and group_event.sub_type == "add"
-    assert group_event.raw["request_type"] == "group"
-    assert friend_event and friend_event.post_type == "request" and friend_event.sub_type == "add"
-    assert friend_event.raw["request_type"] == "friend"
-    assert invite_event and invite_event.sub_type == "invite"
-
-
-def test_onebot_request_event_without_sub_type_stays_unset():
-    event = OneBot11Adapter.parse_event(
-        {"post_type": "request", "request_type": "friend", "flag": "friend-flag-missing-type", "user_id": 32126}
-    )
-    assert event and event.sub_type is None
-
-
-async def test_onebot_request_decisions_send_protocol_payloads():
-    adapter = OneBot11Adapter(api_base="http://onebot.test", ws_url=None, access_token=None, connection_mode="http")
-    calls = []
-
-    async def fake_call_api(action: str, params: dict | None = None):
-        calls.append((action, params))
-        return {"status": "ok"}
-
-    adapter.call_api = fake_call_api
-    await adapter.set_group_add_request("flag-group", "invite", False, "审核未通过")
-    await adapter.set_friend_add_request("flag-friend", True, "QBot")
-
-    assert calls == [
-        (
-            "set_group_add_request",
-            {"flag": "flag-group", "sub_type": "invite", "approve": False, "reason": "审核未通过"},
-        ),
-        ("set_friend_add_request", {"flag": "flag-friend", "approve": True, "remark": "QBot"}),
-    ]
-
-
 async def test_group_request_is_durable_deduplicated_and_reviewable(
     client: httpx.AsyncClient, admin_headers: dict[str, str], mock_account: dict, db
 ):
     account = await db.get(Account, mock_account["id"])
-    event = OneBot11Adapter.parse_event(
-        {
-            "post_type": "request",
-            "request_type": "group",
-            "sub_type": "add",
-            "flag": "group-flag-1",
-            "group_id": GROUP_NUMBER,
-            "user_id": 32123,
-            "comment": "我想加入群聊",
-        }
-    )
+    event = AdapterEvent(post_type="request", sub_type="add", user_id=32123, group_id=GROUP_NUMBER,
+        raw={"request_type":"group", "sub_type":"add", "flag":"group-flag-1", "group_id":GROUP_NUMBER,
+             "user_id":32123, "comment":"我想加入群聊"})
     assert event is not None
     await engine.handle_event(db, account.id, account_manager.adapter(account.id), event)
     await engine.handle_event(db, account.id, account_manager.adapter(account.id), event)

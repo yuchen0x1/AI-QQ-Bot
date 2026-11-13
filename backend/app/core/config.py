@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import ipaddress
 import os
 import socket
 from functools import lru_cache
@@ -41,15 +41,6 @@ class Settings(BaseSettings):
     # 本地开发指到 Vite(5174) 时，GitHub 回调经前端代理进后端，302 /github 不会 404。
     frontend_base_url: str = ""
 
-    # ---------- NapCat 扫码登录 ----------
-    # 可用 NAPCAT_INSTANCES_JSON 配置多个独立 NapCat 实例；单实例也可使用下面的字段。
-    napcat_instances_json: str | None = None
-    napcat_webui_url: str | None = None
-    napcat_webui_token: str | None = None
-    napcat_api_base: str | None = None
-    napcat_ws_url: str | None = None
-    napcat_access_token: str | None = None
-
     # ---------- QQ 官方机器人开放平台 ----------
     # 凭据存放于账号表（加密），这里只配置平台域名，便于私有化/网关环境覆盖。
     qqbot_token_url: str = "https://bots.qq.com/app/getAppAccessToken"
@@ -66,6 +57,15 @@ class Settings(BaseSettings):
     login_lock_minutes: int = 15
     rate_limit_per_minute: int = 240
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173", "http://localhost:8080"]
+    # 只有来自这些网段（逗号分隔的 CIDR / IP）的请求才采信 X-Forwarded-For。
+    # 留空表示完全不采信（直连场景）。Docker Compose 内部网络为 172.16.0.0/12。
+    trusted_proxies: Annotated[list[str], NoDecode] = [
+        "127.0.0.1/32",
+        "::1/128",
+        "172.16.0.0/12",
+        "10.0.0.0/8",
+        "192.168.0.0/16",
+    ]
 
     # ---------- 初始管理员（仅首次初始化使用） ----------
     admin_username: str = "admin"
@@ -105,14 +105,38 @@ class Settings(BaseSettings):
     # 留空则使用 PUBLIC_BASE_URL + /api/github/oauth/callback；反向代理或本地开发时可显式指定。
     github_oauth_redirect_uri: str | None = None
     push_max_retries: int = 3
+    # 在线更新检查使用 GitHub Releases；Web 项目不会在浏览器内自动替换自身文件。
+    update_repository: str = "yuchen0x1/AI-QQ-Bot"
+    update_channel: str = "stable"
+    update_check_interval_minutes: int = 360
+    # 告警 Webhook 默认只允许访问公网地址，避免管理端被用作 SSRF 跳板。
+    # 若部署在隔离网络、确实需要访问内网告警服务，可显式开启。
+    alert_allow_private_networks: bool = False
+    agently_cli_path: str = ""
     backup_dir: str = str(BASE_DIR / "backups")
     data_dir: str = str(BASE_DIR / "data")
     plugin_dir: str = str(BACKEND_DIR / "plugins")
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "trusted_proxies", mode="before")
     @classmethod
     def _parse_origins(cls, value: str | list[str]) -> list[str]:
         return _split(value)
+
+    def is_trusted_proxy(self, host: str | None) -> bool:
+        """判断直连对端是否为可信反向代理，只有它转发的 X-Forwarded-For 才可采信。"""
+        if not host or not self.trusted_proxies:
+            return False
+        try:
+            address = ipaddress.ip_address(host.strip())
+        except ValueError:
+            return False
+        for entry in self.trusted_proxies:
+            try:
+                if address in ipaddress.ip_network(entry.strip(), strict=False):
+                    return True
+            except ValueError:
+                continue
+        return False
 
     @property
     def is_production(self) -> bool:
@@ -132,50 +156,6 @@ class Settings(BaseSettings):
             raise ValueError("生产环境 ADMIN_PASSWORD 必须至少 12 个字符且不能使用默认值")
         if "*" in self.cors_origins:
             raise ValueError("生产环境不允许使用通配 CORS_ORIGINS")
-
-    def napcat_instances(self) -> list[dict[str, str]]:
-        """Read fixed NapCat slots without exposing credentials in API responses."""
-        if self.napcat_instances_json:
-            try:
-                raw = json.loads(self.napcat_instances_json)
-            except json.JSONDecodeError as exc:
-                raise ValueError("NAPCAT_INSTANCES_JSON 不是合法 JSON") from exc
-            if not isinstance(raw, list):
-                raise ValueError("NAPCAT_INSTANCES_JSON 必须是数组")
-            items = raw
-        elif self.napcat_webui_url and self.napcat_webui_token:
-            items = [
-                {
-                    "id": "default",
-                    "name": "NapCat 默认实例",
-                    "webui_url": self.napcat_webui_url,
-                    "webui_token": self.napcat_webui_token,
-                    "api_base": self.napcat_api_base or "",
-                    "ws_url": self.napcat_ws_url or "",
-                    "access_token": self.napcat_access_token or "",
-                }
-            ]
-        else:
-            return []
-        result: list[dict[str, str]] = []
-        for index, item in enumerate(items):
-            if not isinstance(item, dict):
-                continue
-            required = ("webui_url", "webui_token")
-            if any(not str(item.get(key) or "").strip() for key in required):
-                continue
-            result.append(
-                {
-                    "id": str(item.get("id") or f"napcat-{index + 1}"),
-                    "name": str(item.get("name") or f"NapCat 实例 {index + 1}"),
-                    "webui_url": str(item["webui_url"]),
-                    "webui_token": str(item["webui_token"]),
-                    "api_base": str(item.get("api_base") or ""),
-                    "ws_url": str(item.get("ws_url") or ""),
-                    "access_token": str(item.get("access_token") or ""),
-                }
-            )
-        return result
 
     def ensure_dirs(self) -> None:
         for path in (self.data_dir, self.backup_dir, os.path.dirname(self.database_url.split("///")[-1]) if self.database_url.startswith("sqlite") else ""):

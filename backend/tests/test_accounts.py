@@ -9,12 +9,11 @@ import httpx
 from app.services.account_manager import account_manager
 
 
-async def test_onebot_requires_api_base(client: httpx.AsyncClient, admin_headers: dict[str, str]):
+async def test_removed_protocol_is_rejected(client: httpx.AsyncClient, admin_headers: dict[str, str]):
     resp = await client.post(
         "/api/accounts", headers=admin_headers, json={"name": "缺少地址的账号", "protocol": "onebot11"}
     )
-    assert resp.status_code == 400
-    assert "HTTP API 地址" in resp.json()["detail"]
+    assert resp.status_code == 422
 
 
 async def test_create_start_stop(client: httpx.AsyncClient, admin_headers: dict[str, str], mock_account: dict):
@@ -87,8 +86,8 @@ async def test_multi_account_isolation(client: httpx.AsyncClient, admin_headers:
         headers=admin_headers,
         json={
             "name": "第二个模拟账号",
-            "protocol": "mock",
-            "connection_mode": "http",
+            "protocol": "qq_official", "app_id": "999000001", "app_secret": "unit-fixture-secret",
+            "connection_mode": "official_ws",
             "qq_number": 200002,
             "auto_reconnect": False,
         },
@@ -160,7 +159,7 @@ async def test_message_target_and_account_update_validation(
     bad_onebot = await client.put(
         f"/api/accounts/{mock_account['id']}", headers=admin_headers, json={"protocol": "onebot11"}
     )
-    assert bad_onebot.status_code == 400
+    assert bad_onebot.status_code == 422
 
 
 async def test_account_stats(client: httpx.AsyncClient, admin_headers: dict[str, str], mock_account: dict):

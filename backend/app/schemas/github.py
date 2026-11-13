@@ -18,7 +18,8 @@ class RepoCreate(BaseModel):
     token: str | None = None
     webhook_secret: str | None = None
     monitor_enabled: bool = True
-    poll_interval_seconds: int = Field(default=900, ge=60, le=86400)
+    # 未指定时由系统设置 github_default_poll_seconds 决定（默认 900 秒）。
+    poll_interval_seconds: int | None = Field(default=None, ge=60, le=86400)
     notify_prerelease: bool = False
 
     @model_validator(mode="after")
@@ -62,7 +63,10 @@ class RepoOut(ORMModel):
     rule_count: int = 0
     release_count: int = 0
     has_token: bool = False
+    remote_available: bool = True
     has_webhook_secret: bool = False
+    monitor_activity: bool = False
+    activity_initialized_at: datetime | None = None
 
 
 class ReleaseOut(ORMModel):
@@ -123,13 +127,18 @@ class PushRuleOut(ORMModel):
     total_pushed: int
     repo_full_name: str | None = None
     account_name: str | None = None
+    event_types: list[str] = ["release"]
+    managed_by_user_id: int | None = None
+    notification_target_id: int | None = None
+    qq_group_display: str | None = None
 
 
 class PushRecordOut(ORMModel):
     id: int
     repository_id: int
     rule_id: int
-    release_id: int
+    release_id: int | None = None
+    event_id: int | None = None
     release_tag: str | None = None
     account_id: int
     qq_group: int
@@ -141,6 +150,7 @@ class PushRecordOut(ORMModel):
     sent_at: datetime | None = None
     created_at: datetime
     repo_full_name: str | None = None
+    qq_group_display: str | None = None
 
 
 class CheckResult(BaseModel):
@@ -151,6 +161,8 @@ class CheckResult(BaseModel):
     skipped: int = 0
     message: str = ""
     releases: list[str] = []
+    new_events: int = 0
+    warning: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +231,8 @@ class GithubRepoList(BaseModel):
 
 class GithubImportIn(BaseModel):
     full_names: list[str] = Field(min_length=1, max_length=30)
-    poll_interval_seconds: int = Field(default=900, ge=60, le=86400)
+    # 未指定时由系统设置 github_default_poll_seconds 决定（默认 900 秒）。
+    poll_interval_seconds: int | None = Field(default=None, ge=60, le=86400)
     notify_prerelease: bool = False
 
 
@@ -227,3 +240,37 @@ class GithubImportResult(BaseModel):
     imported: list[str] = []
     skipped: list[str] = []
     failed: list[dict[str, str]] = []
+
+
+class GithubTokenIn(BaseModel):
+    token: str = Field(min_length=10, max_length=500)
+
+
+ACTIVITY_TYPES = ["push", "release", "issues", "pull_request", "issue_comment", "pull_request_review", "pull_request_review_comment", "create", "delete", "star", "fork", "workflow_run", "discussion", "discussion_comment", "public", "repository", "gollum", "member"]
+
+
+class GithubAutomationIn(BaseModel):
+    enabled: bool = True
+    account_id: int | None = Field(default=None, gt=0)
+    group_label: str = Field(default="1016190748", min_length=1, max_length=80)
+    qq_group: int | None = Field(default=None, gt=0)
+    poll_interval_seconds: int = Field(default=300, ge=60, le=86400)
+    event_types: list[str] = Field(default_factory=lambda: list(ACTIVITY_TYPES))
+    install_webhooks: bool = False
+
+    @model_validator(mode="after")
+    def validate_events(self) -> "GithubAutomationIn":
+        if not self.event_types or set(self.event_types) - set(ACTIVITY_TYPES):
+            raise ValueError("请选择支持的通知事件")
+        self.event_types = list(dict.fromkeys(self.event_types))
+        return self
+
+
+class GithubNotificationTargetIn(BaseModel):
+    account_id: int = Field(gt=0)
+    group_label: str = Field(pattern=r"^[1-9][0-9]{4,19}$")
+    enabled: bool = True
+
+
+class GroupDisplayNumberIn(BaseModel):
+    display_number: str = Field(pattern=r"^[1-9][0-9]{4,19}$")

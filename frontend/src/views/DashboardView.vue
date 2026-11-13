@@ -4,8 +4,8 @@
     <div class="metric-grid">
       <div class="metric-card" v-for="m in metrics" :key="m.label"><div class="metric-top"><span>{{ m.label }}</span><div class="metric-icon" :class="m.tone"><el-icon><component :is="m.icon" /></el-icon></div></div><div class="metric-value">{{ m.value }}</div><div class="metric-foot"><span :class="m.footClass">{{ m.foot }}</span><span>{{ m.hint }}</span></div></div>
     </div>
-    <div class="dashboard-grid"><section class="surface chart-surface"><div class="surface-head"><div><h3>消息活动</h3><p>最近 7 天收发趋势</p></div><span class="legend"><i class="legend-in"></i>收取 <i class="legend-out"></i>发送</span></div><v-chart class="trend-chart" :option="messageOption" autoresize /></section>
-      <section class="surface chart-surface"><div class="surface-head"><div><h3>AI 调用量</h3><p>每日模型请求统计</p></div><span class="chart-total">{{ aiTotal }} <small>次</small></span></div><v-chart class="trend-chart" :option="aiOption" autoresize /></section></div>
+    <div class="dashboard-grid"><section class="surface chart-surface"><div class="surface-head"><div><h3>消息活动</h3><p>最近 7 天收发趋势</p></div><span class="legend"><i class="legend-in"></i>收取 <i class="legend-out"></i>发送</span></div><AsyncChart class="trend-chart" :option="messageOption" autoresize /></section>
+      <section class="surface chart-surface"><div class="surface-head"><div><h3>AI 调用量</h3><p>每日模型请求统计</p></div><span class="chart-total">{{ aiTotal }} <small>次</small></span></div><AsyncChart class="trend-chart" :option="aiOption" autoresize /></section></div>
     <div class="dashboard-grid lower-grid"><section class="surface"><div class="surface-head"><div><h3>账号运行状态</h3><p>已配置的 QQ 机器人账号</p></div><el-button link type="primary" @click="$router.push('/accounts')">全部账号 <el-icon><ArrowRight /></el-icon></el-button></div>
         <div v-if="!data?.account_status?.length" class="empty-inline"><el-icon><Avatar /></el-icon><span>还没有配置 QQ 账号</span><el-button type="primary" plain size="small" @click="$router.push('/accounts')">添加账号</el-button></div>
         <div v-else class="account-list"><div v-for="account in data.account_status.slice(0,6)" :key="account.id" class="account-row"><div class="account-avatar"><el-icon><Avatar /></el-icon></div><div class="account-info"><b>{{ account.nickname || account.name }}</b><small>{{ accountMeta(account) }}</small></div><el-tag :type="account.state === 'online' ? 'success' : account.state === 'error' ? 'danger' : 'info'" effect="dark" round>{{ stateLabel(account.state) }}</el-tag></div></div>
@@ -16,17 +16,32 @@
   </div>
 </template>
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart, BarChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
-import VChart from 'vue-echarts'
+import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
 import { ArrowRight, Avatar, Bell, Refresh } from '@element-plus/icons-vue'
-import { api, useRealtimeSocket } from '../api'
-use([CanvasRenderer, LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent])
+import { api } from '../api'
+import { storeToRefs } from 'pinia'
+import { useStatusStore } from '../stores/status'
+import { useAutoRefresh } from '../composables/useAutoRefresh'
+
+// ECharts 是首屏最大的依赖（约 500 KB）。仪表盘的指标卡与账号/事件列表不依赖它，
+// 因此把图表组件拆成异步 chunk：先渲染骨架与文字数据，图表按需加载。
+const AsyncChart = defineAsyncComponent(async () => {
+  const [{ use }, { CanvasRenderer }, { LineChart, BarChart }, { GridComponent, TooltipComponent, LegendComponent }, { default: VChart }] =
+    await Promise.all([
+      import('echarts/core'),
+      import('echarts/renderers'),
+      import('echarts/charts'),
+      import('echarts/components'),
+      import('vue-echarts'),
+    ])
+  use([CanvasRenderer, LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent])
+  return VChart
+})
 const loading = ref(false), data = ref<any>(), system = ref<any>()
-const realtime = useRealtimeSocket<any>('/ws/status')
+const status = useStatusStore()
+const { state: socketState, payload: socketPayload } = storeToRefs(status)
+const realtime = { state: socketState, lastMessage: socketPayload, reconnect: status.reconnect }
+onMounted(() => { status.acquire() })
 const metrics = computed(() => [
   { label: 'QQ 账号', value: data.value?.accounts_total ?? 0, foot: `${data.value?.accounts_online ?? 0} 个在线`, hint: `${data.value?.accounts_offline ?? 0} 个离线`, icon: 'Avatar', tone: 'blue', footClass: 'accent' },
   { label: '今日消息', value: data.value?.messages_today ?? 0, foot: `↑ ${data.value?.messages_sent_today ?? 0} 条发送`, hint: '收发合计', icon: 'ChatLineSquare', tone: 'cyan', footClass: 'green-text' },
@@ -128,9 +143,9 @@ const aiOption = computed(() => ({
   ],
 }))
 function stateLabel(state: string) { return ({ online: '在线', starting: '启动中', error: '异常', stopped: '离线', stopping: '停止中' } as any)[state] || state }
-// 官方机器人没有 QQ 号，只有平台 AppID，不能沿用 OneBot 的「QQ 未登录」文案。
+// 官方机器人使用平台 AppID 标识。
 function accountMeta(account: any) {
-  const labels: Record<string, string> = { mock: '模拟适配器', qq_official: 'QQ 官方机器人', onebot11: 'OneBot v11' }
+  const labels: Record<string, string> = { qq_official: 'QQ 官方机器人' }
   const protocol = labels[account.protocol] || account.protocol || '未知协议'
   if (account.protocol === 'qq_official') {
     return account.app_id ? `${protocol} · AppID ${account.app_id}` : protocol
@@ -138,6 +153,8 @@ function accountMeta(account: any) {
   return `QQ ${account.qq_number || '未绑定'} · ${protocol}`
 }
 function formatTime(value: string) { return value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '' }
-async function load() { loading.value = true; try { const [d, s] = await Promise.all([api.get('/dashboard'), api.get('/system/stats')]); data.value = d.data; system.value = s.data } finally { loading.value = false } }
-onMounted(load)
+let refreshingData = false
+async function load(silent = false) { if (refreshingData) return; refreshingData = true; if (!silent) loading.value = true; try { const [d, s] = await Promise.all([api.get('/dashboard'), api.get('/system/stats')]); data.value = d.data; system.value = s.data } finally { refreshingData = false; loading.value = false } }
+onMounted(() => load())
+useAutoRefresh(() => load(true))
 </script>

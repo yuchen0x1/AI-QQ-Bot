@@ -10,6 +10,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import client_ip, get_current_user, require
+from app.api.pagination import PageParam, PageSizeParam
 from app.core.config import settings
 from app.core.ratelimit import login_limiter
 from app.core.security import (
@@ -18,6 +19,7 @@ from app.core.security import (
     decrypt_secret,
     encrypt_secret,
     hash_password,
+    password_needs_rehash,
     token_matches_user,
     verify_password,
 )
@@ -131,6 +133,9 @@ async def login(payload: LoginRequest, request: Request, response: Response, db:
     user.locked_until = None
     user.last_login_at = datetime.now(timezone.utc)
     user.last_login_ip = ip
+    if password_needs_rehash(user.password_hash):
+        # 旧格式哈希（未做 SHA-256 预哈希）在登录成功时就地升级，用户无感知。
+        user.password_hash = hash_password(payload.password)
     db.add(LoginAttempt(username=payload.username, ip=ip, success=True))
     await db.commit()
     await db.refresh(user)
@@ -384,8 +389,8 @@ async def list_roles(db: AsyncSession = Depends(get_db), _: User = Depends(requi
 
 @router.get("/users", response_model=Page[UserOut])
 async def list_users(
-    page: int = 1,
-    page_size: int = 20,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 20,
     keyword: str | None = None,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require("user:manage")),
@@ -480,8 +485,8 @@ async def delete_user(
 
 @router.get("/audit-logs", response_model=Page[AuditLogOut])
 async def list_audit_logs(
-    page: int = 1,
-    page_size: int = 20,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 20,
     action: str | None = None,
     username: str | None = None,
     db: AsyncSession = Depends(get_db),

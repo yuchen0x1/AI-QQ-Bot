@@ -269,11 +269,10 @@ async def test_account_api_exposes_webhook_mode_and_url(client, admin_headers, w
     await adapter.disconnect()
 
 
-async def test_switching_from_official_to_onebot_normalizes_mode(client, admin_headers, webhook_account):
+async def test_switching_to_removed_protocol_is_rejected(client, admin_headers, webhook_account):
     updated = await client.put(
         f"/api/accounts/{webhook_account['id']}",
         headers=admin_headers,
         json={"protocol": "onebot11", "api_base": "http://127.0.0.1:3000"},
     )
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["connection_mode"] == "ws_client"
+    assert updated.status_code == 422, updated.text

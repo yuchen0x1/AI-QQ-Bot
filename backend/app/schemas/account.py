@@ -18,11 +18,8 @@ class AccountBase(BaseModel):
     name: str = Field(min_length=1, max_length=96)
     qq_number: int | None = None
     nickname: str | None = None
-    protocol: Literal["onebot11", "qq_official", "mock"] = "qq_official"
-    connection_mode: Literal["ws_client", "ws_server", "http", "official_ws", "official_webhook"] = "official_ws"
-    api_base: str | None = None
-    ws_url: str | None = None
-    access_token: str | None = None
+    protocol: Literal["qq_official"] = "qq_official"
+    connection_mode: Literal["official_ws", "official_webhook"] = "official_ws"
     # ---- QQ 官方机器人开放平台（bot.qq.com）----
     app_id: str | None = Field(default=None, max_length=64)
     app_secret: str | None = None
@@ -37,7 +34,7 @@ class AccountBase(BaseModel):
     reconnect_max_seconds: int = Field(default=300, ge=5, le=3600)
     remark: str | None = None
 
-    @field_validator("api_base", "ws_url", "app_id", "official_api_base")
+    @field_validator("app_id", "official_api_base")
     @classmethod
     def _strip(cls, value: str | None) -> str | None:
         return value.strip() if value else value
@@ -51,11 +48,8 @@ class AccountUpdate(BaseModel):
     name: str | None = None
     qq_number: int | None = None
     nickname: str | None = None
-    protocol: Literal["onebot11", "qq_official", "mock"] | None = None
-    connection_mode: Literal["ws_client", "ws_server", "http", "official_ws", "official_webhook"] | None = None
-    api_base: str | None = None
-    ws_url: str | None = None
-    access_token: str | None = None
+    protocol: Literal["qq_official"] | None = None
+    connection_mode: Literal["official_ws", "official_webhook"] | None = None
     app_id: str | None = Field(default=None, max_length=64)
     app_secret: str | None = None
     official_sandbox: bool | None = None
@@ -90,13 +84,10 @@ class AccountOut(ORMModel):
     avatar_url: str | None = None
     protocol: str
     connection_mode: str
-    api_base: str | None = None
-    ws_url: str | None = None
     self_id: int | None = None
     app_id: str | None = None
     bot_openid: str | None = None
     webhook_url: str | None = None
-    has_token: bool = False
     has_secret: bool = False
     official_sandbox: bool = False
     official_intents: int = DEFAULT_OFFICIAL_INTENTS
@@ -176,6 +167,8 @@ class GroupOut(ORMModel):
     last_synced_at: datetime | None = None
     settings: GroupSettingsOut | None = None
     account_name: str | None = None
+    display_number: str | None = None
+    display_name: str | None = None
 
 
 class GroupMemberOut(ORMModel):
@@ -257,6 +250,8 @@ class MessageOut(ORMModel):
     blocked: bool = False
     block_reason: str | None = None
     created_at: datetime
+    group_display_number: str | None = None
+    group_display_name: str | None = None
 
 
 class SendMessageRequest(BaseModel):

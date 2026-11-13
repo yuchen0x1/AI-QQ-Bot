@@ -17,7 +17,7 @@ from app.db.migrations import SchemaVersionError
 from app.db.session import SessionLocal
 from app.models import Base, BotCommand, Plugin, Role, SystemSetting, User
 
-HEAD = "0006_auth_security"
+HEAD = "0011_official_only"
 
 
 @pytest.fixture
@@ -51,6 +51,21 @@ async def _version(database_url: str) -> str:
         await engine.dispose()
 
 
+async def _schema_indexes(database_url: str, table: str) -> set[str]:
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.connect() as conn:
+            return set(
+                await conn.run_sync(
+                    lambda sync_conn: {
+                        index["name"] for index in sa.inspect(sync_conn).get_indexes(table)
+                    }
+                )
+            )
+    finally:
+        await engine.dispose()
+
+
 async def _seed_counts() -> tuple[int, int, int, int, int]:
     async with SessionLocal() as session:
         roles = await session.scalar(select(func.count()).select_from(Role))
@@ -72,6 +87,7 @@ async def test_fresh_database_upgrades_to_head(database_url: str) -> None:
     assert "user_github_tokens" in tables
     _, repo_columns = await _schema_snapshot(database_url, "github_repositories")
     assert "owner_user_id" in repo_columns
+    assert "ix_account_connections_lease_id" in await _schema_indexes(database_url, "account_connections")
     assert await _version(database_url) == HEAD
 
 
@@ -121,6 +137,37 @@ async def test_unknown_revision_is_rejected(database_url: str) -> None:
         await engine.dispose()
     with pytest.raises(SchemaVersionError, match="不在当前迁移链中"):
         await migration_module.upgrade_schema(database_url)
+
+
+async def test_official_only_upgrade_retires_legacy_and_preserves_official(database_url: str) -> None:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from app.models import Account, AccountConnection, ScheduledTask
+    await _upgrade_to(database_url, "0010_guides_email_sync")
+    target = create_async_engine(database_url)
+    sessions = async_sessionmaker(target, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            old = Account(account_id="old-account", name="old", protocol="onebot11", enabled=True, auto_start=True)
+            official = Account(account_id="official-account", name="official", protocol="qq_official",
+                               connection_mode="official_webhook", app_id="12345", app_secret_enc="preserved", enabled=True, auto_start=True)
+            db.add_all([old, official])
+            await db.flush()
+            old_id, official_id = old.id, official.id
+            db.add_all([AccountConnection(account_id=old_id, status="online"),
+                        AccountConnection(account_id=official_id, status="online"),
+                        ScheduledTask(name="old notification", task_type="group_message", payload={"account_id":old_id}, enabled=True)])
+            await db.commit()
+        await migration_module.upgrade_schema(database_url)
+        async with sessions() as db:
+            old, official = await db.get(Account, old_id), await db.get(Account, official_id)
+            assert not old.enabled and not old.auto_start
+            assert official.enabled and official.auto_start and official.app_secret_enc == "preserved"
+            assert official.connection_mode == "official_webhook"
+            assert not await db.scalar(select(ScheduledTask.enabled).where(ScheduledTask.name == "old notification"))
+            assert await db.scalar(select(AccountConnection.status).where(AccountConnection.account_id == old_id)) == "stopped"
+            assert await db.scalar(select(AccountConnection.status).where(AccountConnection.account_id == official_id)) == "online"
+    finally:
+        await target.dispose()
 
 
 async def test_legacy_database_without_version_is_rejected(database_url: str) -> None:

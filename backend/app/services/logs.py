@@ -51,6 +51,10 @@ async def write_log(
     # 错误级别日志异步触发第三方告警
     if record.level in ("ERROR", "CRITICAL"):
         try:
+            if commit:
+                from app.services.email_alerts import enqueue
+                await enqueue(db, title=f"QBot 异常告警 [{record.category}]", category=record.category,
+                              body=f"时间（UTC）：{record.created_at.isoformat()}\n分类：{record.category}\n\n{record.message}", event_key=record.message)
             import asyncio
             from app.services.alerting import send_alert
             asyncio.create_task(

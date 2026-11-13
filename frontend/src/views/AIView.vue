@@ -84,7 +84,7 @@
 import { nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Cpu, Connection, Plus, Refresh } from '@element-plus/icons-vue'
-import { api } from '../api'
+import { AI_TIMEOUT, api } from '../api'
 const providers=ref<any[]>([]),models=ref<any[]>([]),usage=ref<any[]>([]),loading=ref(false),usageLoading=ref(false),saving=ref(false),providerDialog=ref(false),modelDialog=ref(false),editingProvider=ref(false),providerRef=ref(),modelRef=ref(),providerRow=ref<any>(),chatDialog=ref(false),chatModel=ref<any>(),chatMessages=ref<any[]>([]),chatInput=ref(''),chatLoading=ref(false),chatBox=ref<HTMLElement>(),usagePage=ref(1),usageTotal=ref(0)
 // AI Playground 调试沙盒状态
 const playgroundVisible=ref(false),pgModelId=ref<number|null>(null),pgSystemPrompt=ref(''),pgTemperature=ref(0.7),pgMaxTokens=ref(2048),pgMessages=ref<any[]>([]),pgInput=ref(''),pgLoading=ref(false),pgChatBox=ref<HTMLElement>()
@@ -96,14 +96,14 @@ async function loadUsage(){usageLoading.value=true;try{const {data}=await api.ge
 function openEditProvider(p:any){editingProvider.value=true;providerRow.value=p;Object.assign(providerForm,{name:p.name,kind:p.kind,base_url:p.base_url,api_key:'',enabled:p.enabled,remark:p.remark||''});providerDialog.value=true}
 function newProvider(){editingProvider.value=false;providerRow.value=null;Object.assign(providerForm,{name:'',kind:'openai',base_url:'',api_key:'',enabled:true,remark:''})}
 async function saveProvider(){await providerRef.value?.validate(async(valid:boolean)=>{if(!valid)return;saving.value=true;try{const payload={...providerForm};if(editingProvider.value&&!payload.api_key)delete (payload as any).api_key;if(editingProvider.value)await api.put(`/ai/providers/${providerRow.value.id}`,payload);else await api.post('/ai/providers',payload);ElMessage.success('供应商已保存');providerDialog.value=false;await load()}finally{saving.value=false}})}
-async function testProvider(p:any){try{const {data}=await api.post(`/ai/providers/${p.id}/test`);if(data.ok)ElMessage.success(data.message);else ElMessage.error(data.message)}catch{}}
+async function testProvider(p:any){try{const {data}=await api.post(`/ai/providers/${p.id}/test`,null,{timeout:AI_TIMEOUT});if(data.ok)ElMessage.success(data.message);else ElMessage.error(data.message)}catch{}}
 async function removeProvider(p:any){try{await ElMessageBox.confirm(`删除供应商「${p.name}」及其模型？`,'确认删除',{type:'warning'});await api.delete(`/ai/providers/${p.id}`);ElMessage.success('已删除');await load()}catch{}}
 function openModel(){Object.assign(modelForm,{provider_id:providers.value.find(p=>p.enabled)?.id||null,model_name:'',display_name:'',temperature:0.7,max_tokens:2048,timeout_seconds:60,retries:1,priority:100,is_default:false,is_fallback:false,enabled:true});modelDialog.value=true}
 async function saveModel(){await modelRef.value?.validate(async(valid:boolean)=>{if(!valid)return;saving.value=true;try{await api.post('/ai/models',modelForm);ElMessage.success('模型已保存');modelDialog.value=false;await load()}finally{saving.value=false}})}
 async function testModel(m:any){chatModel.value=m;chatMessages.value=[];chatInput.value='';chatDialog.value=true}
 async function setDefault(m:any){try{const {data}=await api.post(`/ai/models/${m.id}/default`);ElMessage.success(data.detail||'已设置');await load()}catch{}}
 async function removeModel(m:any){try{await ElMessageBox.confirm(`删除模型「${m.display_name||m.model_name}」？`,'确认删除',{type:'warning'});await api.delete(`/ai/models/${m.id}`);ElMessage.success('已删除');await load()}catch{}}
-async function sendChat(){const text=chatInput.value.trim();if(!text||chatLoading.value)return;chatMessages.value.push({role:'user',content:text});chatInput.value='';chatLoading.value=true;await scrollChat();try{const {data}=await api.post('/ai/chat',{model_id:chatModel.value.id,messages:chatMessages.value.map(m=>({role:m.role==='assistant'?'assistant':'user',content:m.content}))});if(data.ok)chatMessages.value.push({role:'assistant',content:data.content});else ElMessage.error(data.error||'模型调用失败')}finally{chatLoading.value=false;await scrollChat()}}
+async function sendChat(){const text=chatInput.value.trim();if(!text||chatLoading.value)return;chatMessages.value.push({role:'user',content:text});chatInput.value='';chatLoading.value=true;await scrollChat();try{const {data}=await api.post('/ai/chat',{model_id:chatModel.value.id,messages:chatMessages.value.map(m=>({role:m.role==='assistant'?'assistant':'user',content:m.content}))},{timeout:AI_TIMEOUT});if(data.ok)chatMessages.value.push({role:'assistant',content:data.content});else ElMessage.error(data.error||'模型调用失败')}finally{chatLoading.value=false;await scrollChat()}}
 async function scrollChat(){await nextTick();if(chatBox.value)chatBox.value.scrollTop=chatBox.value.scrollHeight}
 function openPlayground(){
   const defaultModel = models.value.find(m => m.is_default) || models.value.find(m => m.enabled !== false)
@@ -135,7 +135,7 @@ async function sendPlayground(){
         role: m.role === 'assistant' ? 'assistant' : 'user',
         content: m.content,
       }))
-    })
+    }, { timeout: AI_TIMEOUT })
     if (data.ok) {
       pgMessages.value.push({
         role: 'assistant',

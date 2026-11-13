@@ -15,8 +15,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import AdapterError, QQAdapter, UnsupportedAction
-from app.adapters.mock import MockAdapter
-from app.adapters.onebot11 import OneBot11Adapter
 from app.adapters.qq_official import QQOfficialAdapter
 from app.core.config import settings
 from app.core.events import publish_event
@@ -44,29 +42,11 @@ _FRIENDLY_NETWORK_KEYWORDS = (
 )
 
 
-def _friendly_connection_error(exc: Exception, protocol: str = "onebot11") -> str:
-    """把底层连接报错翻译成用户能看懂的提示，避免满屏晦涩堆栈。"""
+def _friendly_connection_error(exc: Exception, protocol: str = "qq_official") -> str:
     raw = f"{type(exc).__name__}: {exc}"
-    lowered = str(exc).lower()
-    if protocol == "qq_official":
-        # 官方适配器抛出的错误本身已经带平台错误码与排查建议。
-        if any(k in lowered for k in _FRIENDLY_NETWORK_KEYWORDS):
-            return (
-                f"无法连接 QQ 官方机器人平台（{raw}）。请检查：1) 服务器能否访问 "
-                "bots.qq.com / api.bot.qq.com；2) 开放平台的回调方式与账号设置是否一致"
-                "（WebSocket / Webhook）；3) IP 白名单是否包含本机公网出口 IP；"
-                "4) Webhook 模式下回调地址是否公网 HTTPS 可达"
-            )
-        return raw
-    if any(k in lowered for k in ("http 502", "http 503", "http 504")):
-        return f"协议端无响应（{raw}）。通常是 NapCat/OneBot 协议端未启动或正在重启，请先启动协议端再观察"
-    if any(k in lowered for k in _FRIENDLY_NETWORK_KEYWORDS):
-        return (
-            f"无法连接协议端（{raw}）。请检查：1) NapCat/OneBot 协议端是否已启动；"
-            "2) HTTP API / WebSocket 地址是否填写正确；3) 防火墙是否放行"
-        )
-    if "token" in lowered or "unauthorized" in lowered or "403" in lowered or "401" in lowered:
-        return f"协议端鉴权失败（{raw}）。请核对账号的访问令牌（access token）与协议端配置一致"
+    if any(k in str(exc).lower() for k in _FRIENDLY_NETWORK_KEYWORDS):
+        return (f"无法连接 QQ 官方机器人平台（{raw}）。请检查出站网络、AppID / AppSecret、"
+                "IP 白名单，以及开放平台与后台的 WebSocket / Webhook 设置是否一致")
     return raw
 
 
@@ -97,8 +77,8 @@ class RuntimeState:
 
 
 def build_adapter(account: Account) -> QQAdapter:
-    if account.protocol == "mock":
-        return MockAdapter(self_id=account.qq_number or 10000, nickname=account.nickname or account.name)
+    if account.protocol != "qq_official":
+        raise AdapterError("当前版本仅支持 QQ 官方机器人，请使用 AppID 和 AppSecret 添加官方账号")
     if account.protocol == "qq_official":
         features = account.features or {}
         secret = decrypt_secret(account.app_secret_enc)
@@ -120,12 +100,7 @@ def build_adapter(account: Account) -> QQAdapter:
             nickname=account.nickname or account.name,
             api_base=features.get("official_api_base") or None,
         )
-    return OneBot11Adapter(
-        api_base=account.api_base,
-        ws_url=account.ws_url,
-        access_token=decrypt_secret(account.access_token_enc),
-        connection_mode=account.connection_mode,
-    )
+
 
 
 class AccountManager:
@@ -329,7 +304,7 @@ class AccountManager:
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001
-                friendly = _friendly_connection_error(exc, getattr(adapter, "protocol", "onebot11"))
+                friendly = _friendly_connection_error(exc, getattr(adapter, "protocol", "qq_official"))
                 state.last_error = friendly
                 state.state = "error"
                 state.started_at = None
@@ -416,10 +391,41 @@ class AccountManager:
         while state and not state.stop_requested:
             await asyncio.sleep(max(3, settings.account_lease_renew_seconds))
             if not await self._renew_lease(account_db_id, state.lease_id):
-                state.stop_requested = True
-                state.state = "error"
-                publish_event("account.state", {"account_id": account_db_id, "state": "error", "error": "运行租约已失效"})
+                await self._on_lease_lost(account_db_id, state)
                 return
+
+    async def _on_lease_lost(self, account_db_id: int, state: RuntimeState) -> None:
+        """租约被其它实例接管后必须真正停掉本实例的连接。
+
+        只把 ``stop_requested`` 置位是不够的：``_run_loop`` 正在 ``adapter.listen()``
+        里阻塞，listener 内部不检查该标志，于是两个实例会同时在线并各自收消息、
+        各自回复，造成重复消息与状态错乱。这里显式断开 adapter 并取消运行任务。
+        """
+        state.stop_requested = True
+        state.state = "error"
+        logger.warning("账号 %s 运行租约已失效，主动断开本实例连接", state.name)
+        publish_event(
+            "account.state",
+            {"account_id": account_db_id, "state": "error", "error": "运行租约已被其它实例接管"},
+        )
+        if state.adapter:
+            # disconnect 会让 listen() 的底层连接抛错退出，_run_loop 随后走异常分支。
+            with contextlib.suppress(Exception):
+                await state.adapter.disconnect()
+        if state.task and not state.task.done():
+            state.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await state.task
+        async with SessionLocal() as db:
+            with contextlib.suppress(Exception):
+                await self._set_connection(db, account_db_id, status="error", error="运行租约已被其它实例接管")
+                await write_log(
+                    db,
+                    level="ERROR",
+                    category="qq",
+                    message=f"账号 {state.name} 运行租约已被其它实例接管，本实例已断开连接",
+                    account_id=account_db_id,
+                )
 
     async def _release_lease(self, db: AsyncSession, account_db_id: int, lease_id: str | None) -> None:
         conn = await db.scalar(select(AccountConnection).where(AccountConnection.account_id == account_db_id))
@@ -534,13 +540,17 @@ class AccountManager:
         *,
         markdown: dict[str, Any] | None = None,
         keyboard: dict[str, Any] | None = None,
+        proactive_only: bool = False,
     ) -> dict[str, Any]:
         adapter = self.adapter(account_db_id)
         if not adapter:
             raise AdapterError("账号不在线，无法发送消息")
         if not adapter.supports("send_group_message"):
             raise UnsupportedAction("当前协议端不支持发送群消息")
-        result = await adapter.send_group_message(group_number, content, markdown=markdown, keyboard=keyboard)
+        if proactive_only and adapter.protocol == "qq_official":
+            result = await adapter.send_proactive_group_message(group_number, content)
+        else:
+            result = await adapter.send_group_message(group_number, content, markdown=markdown, keyboard=keyboard)
         state = self._runtimes.get(account_db_id)
         if state:
             state.messages_sent += 1

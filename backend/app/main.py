@@ -12,10 +12,12 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.qqbot_webhook import legacy_router as qqbot_webhook_legacy_router
+from app.api.deps import client_ip
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.ratelimit import api_limiter, legacy_webhook_limiter
+from app.core.version import APP_VERSION
 from app.db.init_db import init_database
 from app.db.session import SessionLocal
 from app.services.account_manager import account_manager
@@ -49,6 +51,8 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("正在关闭平台……")
     await account_manager.stop_all()
+    from app.services.agent_mail import stop_login
+    await stop_login()
     await scheduler_service.shutdown()
     async with SessionLocal() as db:
         await write_log(db, level="INFO", category="system", message="平台已停止", commit=True)
@@ -56,11 +60,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="1.0.0",
+    version=APP_VERSION,
     description="多账号 QQ 机器人管理平台：账号隔离、群管理、AI 中心、GitHub 监控与自动推送",
     lifespan=lifespan,
-    docs_url=f"{settings.api_prefix}/docs",
-    openapi_url=f"{settings.api_prefix}/openapi.json",
+    # 生产环境不公开交互式文档：它会把全部路由与 schema 暴露给未认证访问者。
+    docs_url=None if settings.is_production else f"{settings.api_prefix}/docs",
+    openapi_url=None if settings.is_production else f"{settings.api_prefix}/openapi.json",
 )
 
 app.add_middleware(
@@ -80,7 +85,7 @@ def _path_matches(path: str, prefix: str) -> bool:
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        client = request.client.host if request.client else "unknown"
+        client = client_ip(request)
         # 平台 Webhook 回调不受登录态限流约束：GitHub 与 QQ 官方机器人回调都由签名校验保护。
         callback_paths = (
             f"{settings.api_prefix}/webhook",
@@ -141,10 +146,12 @@ app.include_router(qqbot_webhook_legacy_router)
 
 @app.get("/")
 async def root():
-    return {
+    payload = {
         "name": settings.app_name,
-        "version": "1.0.0",
-        "docs": f"{settings.api_prefix}/docs",
+        "version": APP_VERSION,
         "health": f"{settings.api_prefix}/system/health",
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
+    if not settings.is_production:
+        payload["docs"] = f"{settings.api_prefix}/docs"
+    return payload

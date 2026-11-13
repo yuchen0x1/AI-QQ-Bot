@@ -11,7 +11,7 @@ from app.core.permissions import ROLE_DEFS
 from app.core.security import hash_password
 from app.db.migrations import upgrade_schema
 from app.db.session import SessionLocal
-from app.models import Role, SystemSetting, User
+from app.models import Role, ScheduledTask, SystemSetting, User
 from app.services.commands import seed_commands
 from app.services.github.notify import DEFAULT_TEMPLATE
 from app.services.plugins import plugin_manager
@@ -28,6 +28,26 @@ DEFAULT_SETTINGS: list[dict] = [
     {"key": "data_retention_days", "value": 30, "description": "消息与日志数据保留天数（0 表示永久）"},
     {"key": "alert_webhook_url", "value": "", "description": "异常告警 Webhook 地址（支持飞书/钉钉/企业微信/通用）"},
     {"key": "alert_channel_type", "value": "auto", "description": "告警通道类型：auto/feishu/dingtalk/wechat/custom"},
+]
+
+# 默认定时任务：仅在同名任务不存在时写入，管理员可随时在「定时任务」里停用或改时间。
+# 没有这两个任务时，data_retention_days 与 auto_backup_keep 两个设置等于空转
+# （前端却提示"每日凌晨自动清理"，与实际不符）。
+DEFAULT_TASKS: list[dict] = [
+    {
+        "name": "每日数据清理",
+        "task_type": "clean_expired_data",
+        "schedule_kind": "cron",
+        "cron_expr": "20 3 * * *",
+        "payload": {},
+    },
+    {
+        "name": "每日数据库备份",
+        "task_type": "backup",
+        "schedule_kind": "cron",
+        "cron_expr": "40 3 * * *",
+        "payload": {},
+    },
 ]
 
 
@@ -73,6 +93,13 @@ async def seed() -> None:
             exists = await db.scalar(select(SystemSetting).where(SystemSetting.key == item["key"]))
             if not exists:
                 db.add(SystemSetting(key=item["key"], value={"value": item["value"]}, description=item["description"]))
+        await db.commit()
+
+        # 默认任务按名称幂等写入；已存在（哪怕被停用）就不覆盖管理员的修改。
+        for task_def in DEFAULT_TASKS:
+            exists = await db.scalar(select(ScheduledTask).where(ScheduledTask.name == task_def["name"]))
+            if not exists:
+                db.add(ScheduledTask(**task_def, enabled=True, created_by="system"))
         await db.commit()
 
         await seed_commands(db)

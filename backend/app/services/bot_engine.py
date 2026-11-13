@@ -34,6 +34,22 @@ DEFAULT_WELCOME = "欢迎 {nickname} 加入 {group_name}！"
 MAX_REPLY_CHARS = 1200
 
 
+async def effective_blocked_words(db, group_settings: GroupSettings | None) -> list[str]:
+    """AI 回复的过滤词：群配置违禁词 ∪ 系统设置 ai_blocked_words。
+
+    系统设置这一项之前只写不读，管理员配了也不生效。这里合并去重后返回，
+    任一来源为空都不影响另一来源。
+    """
+    from app.services.settings_store import read_setting
+
+    words: list[str] = [w for w in ((group_settings.banned_words if group_settings else None) or []) if w]
+    for item in await read_setting(db, "ai_blocked_words", []) or []:
+        if isinstance(item, str) and item.strip():
+            words.append(item.strip())
+    # 去重但保留顺序
+    return list(dict.fromkeys(words))
+
+
 class BotEngine:
     """消息处理入口。
 
@@ -264,6 +280,17 @@ class BotEngine:
             group, settings = await self._ensure_group(db, account, event.group_id, event)
             member = await self._upsert_member(db, group, event)
 
+            from app.services.github.automation import bind_from_message
+
+            binding_reply = await bind_from_message(db, account.id, event.group_id, self._clean_text(event, text))
+            if binding_reply:
+                # Do not persist the one-time code in message history or send it to AI.
+                await self.send_text(db, account, adapter, binding_reply, group_number=event.group_id, user_id=event.user_id)
+                from app.services.scheduler import scheduler_service
+
+                scheduler_service.request_activity_sync()
+                return
+
         record = Message(
             account_id=account.id,
             group_id=group.id if group else None,
@@ -428,7 +455,7 @@ class BotEngine:
             )
             return
 
-        blocked_words = (settings.banned_words if settings else []) or []
+        blocked_words = await effective_blocked_words(db, settings)
         answer = result.content.strip()
         if any(word and word in answer for word in blocked_words):
             answer = "（该回复触发内容安全过滤，已拦截）"

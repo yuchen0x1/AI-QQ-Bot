@@ -15,6 +15,8 @@
        └─ 0003_runtime_leases.py
             └─ 0004_qq_official.py
                  └─ 0005_github_oauth.py
+                      └─ 0006_auth_security.py
+                           └─ 0007_runtime_lease_index.py
 ```
 
 - `0001_initial` 为显式 DDL 快照，直接创建基线表与索引，不依赖运行时模型定义。
@@ -22,6 +24,8 @@
 - `0003_runtime_leases` 为 `account_connections` 增加 `lease_owner`、`lease_id`、`lease_expires_at` 及索引，为 `scheduled_tasks` 增加 `queue_name`、`job_key` 并建立索引（列/索引已存在时跳过）。
 - `0004_qq_official` 为 `accounts` 增加 `app_id`、`app_secret_enc`（Fernet 密文）、`bot_openid` 与索引，并创建 `qq_official_identities`（OpenID → 内部整数 ID 映射，唯一键 `(account_id, kind, scope, openid)`）。列/索引/表已存在时跳过，兼容旧库升级。
 - `0005_github_oauth` 创建 `user_github_tokens`（每个平台用户一条 GitHub 绑定，`user_id` 唯一、`github_id` 唯一，`access_token_enc` 为 Fernet 密文），并为 `github_repositories` 增加 `owner_user_id` 与索引，用于按用户隔离仓库。SQLite 的 `ALTER TABLE` 不支持追加外键，该列按软引用处理，删除用户时由应用层置空；列/索引/表已存在时跳过。
+- `0006_auth_security` 增加 TOTP 字段与可撤销登录会话表。
+- `0007_runtime_lease_index` 为已有数据库补齐 `account_connections.lease_id` 唯一索引，修复早期迁移已到 head 但索引缺失的情况；重复执行安全幂等。
 - `migrations/env.py` 从 `app.models` 导入完整 metadata，并按 `DATABASE_URL` 在线/离线运行。
 
 推荐命令：

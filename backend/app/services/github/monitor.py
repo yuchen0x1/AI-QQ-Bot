@@ -141,7 +141,7 @@ async def sync_releases(
         if exc.status_code == 404:
             raise
         payloads = []
-    if not payloads:
+    if not payloads and not repo.monitor_activity:
         tags = await client.list_tags(repo.owner, repo.name)
         payloads = [
             {
@@ -238,8 +238,15 @@ async def check_repository(
             records = list(push_rows)
             result["pushed"] = sum(1 for row in records if row.status == "success")
             result["skipped"] = sum(1 for row in records if row.status == "skipped")
+        if repo.provider == "github" and repo.monitor_activity:
+            from app.services.github.activity import sync_activity
+
+            activity = await sync_activity(db, repo, client, notify=notify)
+            result["new_events"] = activity["new_events"]
+            result["pushed"] += activity["pushed"]
+            result["warning"] = activity["warning"]
         result["ok"] = True
-        result["message"] = f"检查完成，发现 {len(new_releases)} 个新版本"
+        result["message"] = f"检查完成，发现 {len(new_releases)} 个新版本、{result.get('new_events', 0)} 条新动态"
         if new_releases:
             await write_log(
                 db,
@@ -292,6 +299,27 @@ async def handle_webhook_payload(
     event_type: str = "release",
 ) -> dict[str, Any]:
     """处理 GitHub Webhook 事件：验签已在路由层完成。"""
+    if event_type == "repository" and payload.get("action") in {"deleted", "transferred"}:
+        from app.services.github.automation import reconcile_rules
+        from app.services.scheduler import scheduler_service
+        repo.remote_available = False
+        repo.last_check_status = "unavailable"
+        repo.last_check_error = "GitHub 已通知仓库删除或转移，历史保留"
+        await db.commit()
+        scheduler_service.unschedule_repo(repo.id)
+        if repo.owner_user_id:
+            await reconcile_rules(db, repo.owner_user_id)
+        return {"ok": True, "new_releases": 0, "message": "已停止不可访问仓库的监控，历史保留"}
+    if not repo.monitor_enabled:
+        return {"ok": True, "message": "仓库监控已暂停", "new_releases": 0}
+    if event_type != "release" or payload.get("action") not in {"published", "released", "updated", "created"}:
+        if repo.monitor_activity:
+            from app.services.github.activity import ingest_activity
+
+            return await ingest_activity(db, repo, event_type, {**payload, "_delivery_id": delivery_id}, source="webhook")
+        return {"ok": True, "message": "该仓库仅监控版本发布", "new_releases": 0}
+    if (payload.get("release") or {}).get("draft"):
+        return {"ok": True, "message": "草稿版本不发送通知", "new_releases": 0}
     if event_type not in {"release", "push", "create"}:
         return {"ok": True, "message": f"忽略事件类型 {event_type}", "new_releases": 0}
     if event_type == "release":

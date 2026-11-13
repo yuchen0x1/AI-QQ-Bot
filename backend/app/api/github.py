@@ -6,16 +6,18 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require
+from app.api.pagination import PageParam, PageSizeParam
 from app.core.security import decrypt_secret, encrypt_secret, mask_secret
 from app.db.session import get_db
 from app.models import (
     Account,
     GithubRelease,
     GithubRepository,
+    Group,
     PushRecord,
     PushRule,
     User,
@@ -43,6 +45,7 @@ from app.services.github.registry import (
     repo_scope_condition,
 )
 from app.services.logs import audit, write_log
+from app.services.group_display import group_labels
 from app.services.scheduler import scheduler_service
 
 router = APIRouter(prefix="/github", tags=["GitHub监控"])
@@ -64,6 +67,7 @@ def serialize_repo(repo: GithubRepository, rules: int = 0, releases: int = 0, ow
         owner_user_id=repo.owner_user_id,
         owner_username=owner_name,
         monitor_enabled=repo.monitor_enabled,
+        remote_available=repo.remote_available,
         poll_interval_seconds=repo.poll_interval_seconds,
         notify_prerelease=repo.notify_prerelease,
         last_checked_at=repo.last_checked_at,
@@ -76,6 +80,8 @@ def serialize_repo(repo: GithubRepository, rules: int = 0, releases: int = 0, ow
         release_count=releases,
         has_token=bool(repo.token_enc),
         has_webhook_secret=bool(repo.webhook_secret_enc),
+        monitor_activity=repo.monitor_activity,
+        activity_initialized_at=repo.activity_initialized_at,
     )
 
 
@@ -132,8 +138,10 @@ def _parse_target(payload: RepoCreate) -> tuple[str, str, str]:
 # 仓库
 # ---------------------------------------------------------------------------
 @router.get("/repos", response_model=list[RepoOut])
-async def list_repos(db: AsyncSession = Depends(get_db), user: User = Depends(require("github:view"))):
+async def list_repos(include_unavailable: bool = False, db: AsyncSession = Depends(get_db), user: User = Depends(require("github:view"))):
     query = select(GithubRepository)
+    if not include_unavailable:
+        query = query.where(GithubRepository.remote_available.is_(True))
     scope = repo_scope_condition(user)
     if scope is not None:
         query = query.where(scope)
@@ -257,8 +265,8 @@ async def check_all(db: AsyncSession = Depends(get_db), user: User = Depends(req
 @router.get("/repos/{repo_id}/releases", response_model=Page[ReleaseOut])
 async def repo_releases(
     repo_id: int,
-    page: int = 1,
-    page_size: int = 20,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 20,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require("github:view")),
 ):
@@ -285,7 +293,7 @@ async def webhook_info(
         "content_type": "application/json",
         "secret_masked": mask_secret(decrypt_secret(repo.webhook_secret_enc)),
         "has_secret": bool(repo.webhook_secret_enc),
-        "events": ["Release"],
+        "events": ["release", "push", "issues", "pull_request", "issue_comment", "create", "delete", "star", "fork", "workflow_run"],
         "note": "在 GitHub 仓库 Settings → Webhooks 中添加该地址，内容类型选择 application/json，并填写相同的 Secret。",
     }
 
@@ -314,7 +322,13 @@ def serialize_rule(rule: PushRule, repo_name: str | None = None, account_name: s
 async def _rule_context(db: AsyncSession, rules: list[PushRule]) -> list[PushRuleOut]:
     repos = {r.id: r.full_name for r in await db.scalars(select(GithubRepository))}
     accounts = {a.id: a.name for a in await db.scalars(select(Account))}
-    return [serialize_rule(r, repos.get(r.repository_id), accounts.get(r.account_id)) for r in rules]
+    labels = await group_labels(db)
+    result = []
+    for rule in rules:
+        item = serialize_rule(rule, repos.get(rule.repository_id), accounts.get(rule.account_id))
+        item.qq_group_display = labels.get((rule.account_id, rule.qq_group), {}).get("number")
+        result.append(item)
+    return result
 
 
 async def _visible_repo_ids(db: AsyncSession, user: User) -> set[int] | None:
@@ -393,8 +407,8 @@ async def delete_rule(rule_id: int, db: AsyncSession = Depends(get_db), user: Us
 # ---------------------------------------------------------------------------
 @router.get("/push-records", response_model=Page[PushRecordOut])
 async def list_push_records(
-    page: int = 1,
-    page_size: int = 20,
+    page: PageParam = 1,
+    page_size: PageSizeParam = 20,
     status: str | None = None,
     repo_id: int | None = None,
     qq_group: int | None = None,
@@ -412,14 +426,18 @@ async def list_push_records(
     if repo_id:
         query = query.where(PushRecord.repository_id == repo_id)
     if qq_group:
-        query = query.where(PushRecord.qq_group == qq_group)
+        matching_groups = select(Group.account_id, Group.group_number).where(Group.display_number == str(qq_group))
+        query = query.where(or_(PushRecord.qq_group == qq_group,
+                                tuple_(PushRecord.account_id, PushRecord.qq_group).in_(matching_groups)))
     total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(await db.scalars(query.order_by(PushRecord.id.desc()).offset((page - 1) * page_size).limit(page_size)))
     repos = {r.id: r.full_name for r in await db.scalars(select(GithubRepository))}
     items = []
+    labels = await group_labels(db)
     for record in rows:
         data = PushRecordOut.model_validate(record)
         data.repo_full_name = repos.get(record.repository_id)
+        data.qq_group_display = labels.get((record.account_id, record.qq_group), {}).get("number")
         items.append(data)
     return Page(items=items, total=total, page=page, page_size=page_size)
 

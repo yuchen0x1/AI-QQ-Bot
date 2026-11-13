@@ -10,6 +10,8 @@ from __future__ import annotations
 import time
 from collections import defaultdict, deque
 
+from app.core.config import settings
+
 
 class SlidingWindowLimiter:
     # 每 N 次 allow 调用触发一次清扫，摊销成本可忽略。
@@ -55,6 +57,8 @@ class SlidingWindowLimiter:
 
 
 login_limiter = SlidingWindowLimiter(limit=10, window_seconds=300)
-api_limiter = SlidingWindowLimiter(limit=600, window_seconds=60)
+# api_limiter 的阈值来自 RATE_LIMIT_PER_MINUTE（此前该环境变量从未被读取，
+# 配置了也不生效）。下限收紧到 60，避免误配成 0 直接锁死整个后台。
+api_limiter = SlidingWindowLimiter(limit=max(60, settings.rate_limit_per_minute), window_seconds=60)
 # 兼容旧版根路径回调 /webhook：该路径不在 /api 前缀下，需要独立限流。
 legacy_webhook_limiter = SlidingWindowLimiter(limit=120, window_seconds=60)

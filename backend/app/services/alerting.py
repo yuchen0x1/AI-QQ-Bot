@@ -6,21 +6,65 @@
 from __future__ import annotations
 
 import logging
+import ipaddress
+from urllib.parse import urlsplit
 import time
 from typing import Any
 
-from sqlalchemy import select
 
 from app.core.http import new_client
+from app.core.config import settings
 from app.core.logging import mask_text
 from app.db.session import SessionLocal
-from app.models import SystemSetting
 
 logger = logging.getLogger("qbot.alerting")
 
 # 相同告警内容防刷频间隔（秒）
 DEBOUNCE_SECONDS = 180.0
 _last_sent: dict[str, float] = {}
+
+
+def validate_webhook_url(url: str, *, allow_private: bool | None = None) -> tuple[bool, str]:
+    """校验告警回调地址，阻断常见 SSRF 目标。
+
+    告警地址由管理员在控制台配置，但后台进程仍不应被借此访问本机、云元数据
+    或容器管理网段。这里不限制第三方域名，只拒绝非 HTTP(S)、带用户凭据、
+    localhost / 单标签主机名，以及私有/回环/链路本地等 IP 字面量。
+    """
+    raw = str(url or "").strip()
+    if not raw or len(raw) > 2048:
+        return False, "Webhook 地址为空或过长"
+    try:
+        parsed = urlsplit(raw)
+        host = parsed.hostname
+        port = parsed.port  # 触发非法端口的 ValueError
+    except ValueError:
+        return False, "Webhook 地址格式无效"
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return False, "Webhook 仅支持 http 或 https"
+    if not host or parsed.username or parsed.password:
+        return False, "Webhook 地址必须包含主机名且不能携带用户凭据"
+    if parsed.fragment:
+        return False, "Webhook 地址不能包含 fragment"
+    host_lower = host.rstrip(".").lower()
+    if host_lower in {"localhost", "localhost.localdomain", "ip6-localhost"} or "." not in host_lower:
+        return False, "Webhook 不允许访问本机或单标签内网主机"
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    private_allowed = settings.alert_allow_private_networks if allow_private is None else allow_private
+    if address and not private_allowed and (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+    ):
+        return False, "Webhook 不允许访问私有、回环或保留 IP 地址"
+    _ = port
+    return True, ""
 
 
 def _detect_channel(url: str, override: str | None = None) -> str:
@@ -98,14 +142,18 @@ async def send_alert(title: str, content: str, *, force: bool = False) -> bool:
                     _last_sent.pop(k, None)
 
     try:
+        from app.services.settings_store import read_setting
+
         async with SessionLocal() as db:
-            url_row = await db.scalar(select(SystemSetting).where(SystemSetting.key == "alert_webhook_url"))
-            webhook_url = str((url_row.value or {}).get("value") or "").strip() if url_row else ""
+            webhook_url = str(await read_setting(db, "alert_webhook_url", "") or "").strip()
             if not webhook_url:
                 return False
+            channel_type = str(await read_setting(db, "alert_channel_type", "auto") or "auto")
 
-            type_row = await db.scalar(select(SystemSetting).where(SystemSetting.key == "alert_channel_type"))
-            channel_type = str((type_row.value or {}).get("value") or "auto") if type_row else "auto"
+        valid, reason = validate_webhook_url(webhook_url)
+        if not valid:
+            logger.warning("告警 Webhook 地址被拒绝：%s", reason)
+            return False
 
         channel = _detect_channel(webhook_url, channel_type)
         payload = _build_payload(channel, title, content)

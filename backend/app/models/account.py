@@ -19,8 +19,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, utcnow
 
-PROTOCOLS = ("onebot11", "qq_official", "mock")
-CONNECTION_MODES = ("ws_client", "ws_server", "http", "official_ws", "official_webhook")
+PROTOCOLS = ("qq_official",)
+CONNECTION_MODES = ("official_ws", "official_webhook")
 
 
 class Account(Base, TimestampMixin):
@@ -32,8 +32,9 @@ class Account(Base, TimestampMixin):
     qq_number: Mapped[int | None] = mapped_column(BigInteger, index=True)
     nickname: Mapped[str | None] = mapped_column(String(96))
     avatar_url: Mapped[str | None] = mapped_column(String(512))
-    protocol: Mapped[str] = mapped_column(String(32), default="onebot11", nullable=False)
-    connection_mode: Mapped[str] = mapped_column(String(32), default="ws_client", nullable=False)
+    protocol: Mapped[str] = mapped_column(String(32), default="qq_official", nullable=False)
+    connection_mode: Mapped[str] = mapped_column(String(32), default="official_ws", nullable=False)
+    # Retained solely for reading historical databases; no active API or adapter uses these columns.
     api_base: Mapped[str | None] = mapped_column(String(255))
     ws_url: Mapped[str | None] = mapped_column(String(255))
     access_token_enc: Mapped[str | None] = mapped_column(Text)
@@ -84,6 +85,7 @@ class Group(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True, nullable=False)
     group_number: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    display_number: Mapped[str | None] = mapped_column(String(32), index=True)
     name: Mapped[str | None] = mapped_column(String(190))
     member_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     max_member_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
