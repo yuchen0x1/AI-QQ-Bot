@@ -19,7 +19,7 @@ api.interceptors.response.use((response) => response, (error) => {
   if (status === 401 && !location.pathname.startsWith('/login')) {
     localStorage.removeItem('qbot_token')
     location.href = '/login'
-  } else if (status !== 401) {
+  } else if (status !== 401 && !(localStorage.getItem('qbot_upgrade_pending') && Date.now() - Number(localStorage.getItem('qbot_upgrade_pending_since') || 0) < 1200000 && (!status || status === 502 || status === 503))) {
     ElMessage.error(error?.response?.data?.detail || error?.message || '请求失败')
   }
   return Promise.reject(error)

@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     update_repository: str = "yuchen0x1/AI-QQ-Bot"
     update_channel: str = "stable"
     update_check_interval_minutes: int = 360
+    update_socket: str = ""
+    update_maintenance_file: str = ""
     # 告警 Webhook 默认只允许访问公网地址，避免管理端被用作 SSRF 跳板。
     # 若部署在隔离网络、确实需要访问内网告警服务，可显式开启。
     alert_allow_private_networks: bool = False

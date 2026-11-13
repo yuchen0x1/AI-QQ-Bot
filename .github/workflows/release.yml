@@ -58,6 +58,7 @@ jobs:
           mkdir -p release
           git archive --format=tar.gz --prefix="qbot-ai-${VERSION_NUMBER}/" "${GITHUB_SHA}" > "release/qbot-ai-${VERSION_NUMBER}.tar.gz"
           python scripts/package_server.py --output "release/qbot-ai-${VERSION_NUMBER}.zip"
+          python scripts/package_native.py --tag "${VERSION}" --output "release/qbot-ai-${VERSION_NUMBER}-native.tar.gz"
           cd release
           sha256sum qbot-ai-*.tar.gz qbot-ai-*.zip > SHA256SUMS
       - name: Publish GitHub Release

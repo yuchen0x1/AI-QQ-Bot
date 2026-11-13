@@ -2,6 +2,8 @@
 
 已有 SQLite 数据需要迁移到单台 Linux 服务器时，可使用 [原生 Linux 部署](docs/NATIVE_SERVER.md)，保留原密钥、群绑定和历史，使用 systemd 常驻运行及宿主机 Nginx HTTPS。
 
+原生部署可以按文档安装独立升级服务，之后在后台「系统设置 → 在线更新」点击「立即升级」，自动下载、备份、安装和重启服务。
+
 ## 生产 Compose 部署
 
 1. 安装 Docker Engine 和 Compose v2，将项目放到 Linux 主机。

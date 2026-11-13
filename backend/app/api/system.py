@@ -7,6 +7,8 @@ import sys
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,7 +44,9 @@ async def health():
             await conn.execute(text("SELECT 1"))
     except Exception:  # noqa: BLE001
         db_ok = False
-    payload = {"status": "ok" if db_ok else "degraded", "database": db_ok, "version": APP_VERSION}
+    from app.services.runtime_start import services_deferred
+    payload = {"status": "ok" if db_ok else "degraded", "database": db_ok, "version": APP_VERSION,
+               "services_deferred": services_deferred}
     # 探活端点必须通过 HTTP 状态反映不可用，否则反向代理会把数据库故障实例
     # 继续放进流量池，只返回一个看似正常的 JSON。
     return JSONResponse(status_code=200 if db_ok else 503, content=payload)
@@ -88,7 +92,38 @@ async def update_info(channel: str | None = None, _: User = Depends(require("sys
     """检查 GitHub Releases；网络失败只返回诊断，不阻断管理台。"""
     from app.services.update_checker import check_for_update
 
-    return await check_for_update(channel)
+    from app.services.update_installer import installer_state
+    result = await check_for_update(channel)
+    result["installer"] = await installer_state()
+    native = f"qbot-ai-{result.get('latest_version')}-native.tar.gz"
+    result["installable"] = bool(result["installer"]["available"] and result.get("update_available")
+        and not result.get("prerelease") and any(a["name"] == native and a.get("sha256") for a in result["assets"]))
+    return result
+
+
+class InstallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: str = Field(pattern=r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+    request_id: UUID
+
+
+@router.get("/update/install")
+async def install_status(_: User = Depends(require("system:manage"))):
+    from app.services.update_installer import installer_state
+    return await installer_state()
+
+
+@router.post("/update/install", status_code=202)
+async def install_update(payload: InstallRequest, db: AsyncSession = Depends(get_db),
+                         user: User = Depends(require("system:manage"))):
+    from app.services.update_installer import installer_rpc, InstallerUnavailable
+    try:
+        state = await installer_rpc("POST", {"version": payload.version, "request_id": str(payload.request_id)})
+    except InstallerUnavailable as exc:
+        raise HTTPException(409, str(exc)) from exc
+    await audit(db, user_id=user.id, username=user.username, action="install_update", target=payload.version,
+                detail=f"job={payload.request_id}")
+    return {"available": True, **state}
 
 
 @router.get("/settings", response_model=list[SettingOut])

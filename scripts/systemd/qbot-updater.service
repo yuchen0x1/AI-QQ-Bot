@@ -1,0 +1,22 @@
+[Unit]
+Description=QBot server upgrade supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/qbot-updater/daemon.py --config /etc/qbot/updater.json
+Restart=on-failure
+RestartSec=3
+UMask=0077
+RuntimeDirectory=qbot-updater
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/qbot /var/lib/qbot /var/backups/qbot /var/lib/qbot-updater /var/lib/qbot-updater-status /run/qbot-updater
+
+[Install]
+WantedBy=multi-user.target

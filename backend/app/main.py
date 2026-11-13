@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -41,15 +43,23 @@ async def lifespan(app: FastAPI):
     async with SessionLocal() as db:
         stats = await plugin_manager.load_all(db)
         logger.info("插件加载结果：%s", stats)
-    if settings.scheduler_enabled:
-        await scheduler_service.start()
-    started = await account_manager.boot_auto_start()
-    if started:
-        logger.info("已自动启动 %s 个账号", len(started))
+    from app.services.runtime_start import start_runtime
+    from pathlib import Path
+    runtime_task = None
+    if settings.update_maintenance_file and Path(settings.update_maintenance_file).exists():
+        from app.services import runtime_start
+        runtime_start.services_deferred = True
+        runtime_task = asyncio.create_task(start_runtime(), name="upgrade-runtime-start")
+    else:
+        await start_runtime()
     async with SessionLocal() as db:
         await write_log(db, level="INFO", category="system", message="平台启动完成")
     yield
     logger.info("正在关闭平台……")
+    if runtime_task:
+        runtime_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await runtime_task
     await account_manager.stop_all()
     from app.services.agent_mail import stop_login
     await stop_login()
