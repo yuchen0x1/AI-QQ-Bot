@@ -3,16 +3,16 @@
   <el-tabs v-model="tab">
     <el-tab-pane label="分步设置" name="setup">
       <div class="guide-layout">
-        <nav class="surface guide-index" aria-label="设置步骤"><p>你的设置进度</p><button v-for="(lesson, index) in setupLessons" :key="lesson.title" :class="{ selected: active === index }" @click="selectStep(index)"><span>{{ state.steps?.[index]?.ready ? '✓' : index + 1 }}</span><div><b>{{ lesson.title }}</b><small>{{ state.steps?.[index]?.ready ? '检查通过' : index === 4 ? '可稍后设置' : '等待设置' }}</small></div></button></nav>
+        <nav class="surface guide-index" aria-label="设置步骤"><p>你的设置进度</p><button v-for="(lesson, index) in setupLessons" :key="lesson.title" :class="{ selected: active === index }" @click="selectStep(index)"><span>{{ state.steps?.[index]?.ready ? '✓' : index + 1 }}</span><div><b>{{ lesson.title }}</b><small>{{ state.steps?.[index]?.ready ? '检查通过' : state.steps?.[index]?.optional ? '可稍后设置' : '等待设置' }}</small></div></button></nav>
         <section class="surface guide-lesson" aria-live="polite">
           <div class="lesson-progress">步骤 {{ active + 1 }} / {{ setupLessons.length }}</div>
           <h2>{{ current.title }}</h2><p>{{ current.intro }}</p>
           <ol><li v-for="text in current.steps" :key="text">{{ text }}</li></ol>
           <el-alert :title="current.note" type="info" :closable="false" />
-          <QqSettingsIllustrations v-if="active === 2" />
+          <QqSettingsIllustrations v-if="current.illustrations" />
           <div class="actual-state"><el-tag :type="state.steps?.[active]?.ready ? 'success' : 'warning'">{{ state.steps?.[active]?.ready ? '实际配置检查通过' : '尚待完成检查' }}</el-tag><span>{{ state.steps?.[active]?.allowed === false ? '当前账号没有设置权限，请联系管理员' : state.steps?.[active]?.hint }}</span></div>
           <div class="lesson-actions"><el-button type="primary" :disabled="state.steps?.[active]?.allowed === false" @click="$router.push(state.steps?.[active]?.path || '/')">{{ current.action }}</el-button><el-button :loading="loading" @click="refresh">重新检查</el-button></div>
-          <footer><el-button :disabled="active === 0" @click="selectStep(active - 1)">上一步</el-button><el-button v-if="active < 4" @click="selectStep(active + 1)">下一步</el-button><el-button v-else @click="tab = 'docs'">阅读操作文档</el-button></footer>
+          <footer><el-button :disabled="active === 0" @click="selectStep(active - 1)">上一步</el-button><el-button v-if="active < setupLessons.length - 1" @click="selectStep(active + 1)">下一步</el-button><el-button v-else @click="tab = 'docs'">阅读操作文档</el-button></footer>
         </section>
       </div>
     </el-tab-pane>
@@ -32,7 +32,7 @@ let stepSelected = false
 const current = computed(() => setupLessons[active.value]!)
 const filtered = computed(() => helpArticles.filter(a => `${a.title} ${a.category} ${a.paragraphs.join(' ')}`.toLowerCase().includes(query.value.trim().toLowerCase())))
 async function refresh() { loading.value = true; try { state.value = (await api.get('/onboarding')).data } finally { loading.value = false } }
-async function selectStep(index: number) { stepSelected = true; active.value = Math.max(0, Math.min(4, index)); await api.put('/onboarding', { seen: true, step: active.value }) }
+async function selectStep(index: number) { stepSelected = true; active.value = Math.max(0, Math.min(setupLessons.length - 1, index)); await api.put('/onboarding', { seen: true, step: active.value }) }
 async function restart() { tab.value = 'setup'; await selectStep(0); await refresh() }
 onMounted(async () => { await refresh(); if (!stepSelected) { active.value = state.value.progress?.step || 0; await api.put('/onboarding', { seen: true, step: active.value }) } })
 useAutoRefresh(refresh, 15000)

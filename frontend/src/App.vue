@@ -27,7 +27,7 @@
 
     <!-- 修改密码对话框 -->
     <el-dialog v-model="guideVisible" title="第一次使用，从这里开始" width="min(560px, calc(100vw - 28px))" :before-close="closeGuide">
-      <p style="line-height:1.9;color:#b6c8e0">按顺序连接机器人、授权 GitHub、绑定通知群并开启主动推送，再验证通知和失败邮件。每一步都有操作说明和真实状态检查。</p>
+      <p style="line-height:1.9;color:#b6c8e0">按顺序连接机器人、配置 AI 模型、授权 GitHub、绑定通知群并开启主动推送，再验证通知和失败邮件。每一步都有操作说明和真实状态检查。</p>
       <p style="line-height:1.9;color:#92accb">以后可以随时从左侧「新手指引与文档」重新打开教学。</p>
       <template #footer><el-button @click="dismissGuide">稍后设置</el-button><el-button type="primary" @click="startGuide">开始分步设置</el-button></template>
     </el-dialog>

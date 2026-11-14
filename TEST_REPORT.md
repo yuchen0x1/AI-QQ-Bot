@@ -1,6 +1,16 @@
 # TEST_REPORT
 
-## v1.4.4 发布：2026-11-14（AI 供应商自动获取模型）
+## v1.4.5 发布：2026-11-14（新手指引六步升级）
+
+| 状态 | 命令或范围 | 结果 |
+|---|---|---|
+| PASS | `pytest tests/test_ai.py tests/test_email_onboarding.py` | onboarding steps 5→6（新增「配置 AI 模型」，path=/ai，真实状态检查：启用供应商+启用模型即 ready）；GuideProgress step 上限 le=5（step=99 仍 422）；AI 步骤在有模型时 ready=True |
+| PASS | `pytest --tb=short -q`（backend 全量） | 229 项通过，0 失败（exit 0） |
+| PASS | `ruff check app tests migrations`、`npm run build`（frontend） | 通过；guideContent 课程顺序与后端步骤一致（QQ→AI→GitHub→群→验证→邮件），helpArticles 9→12 篇 |
+| PASS | `prepare_release.py --tag v1.4.5` | 三件套版本一致、canonical notes 就绪 |
+| （待补） | Release 工作流 / 生产验收 | 随 tag v1.4.5 触发，结果待回填 |
+
+## v1.4.4 发布：2026-11-14（AI 供应商自动获取模型） 发布：2026-11-14（AI 供应商自动获取模型）
 
 | 状态 | 命令或范围 | 结果 |
 |---|---|---|

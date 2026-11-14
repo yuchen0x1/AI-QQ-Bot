@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 2026-11-14 — 新手指引六步升级（v1.4.5）
+
+- **向导新增「配置 AI 模型」步骤**（index 1）：ready = 存在启用的 AI 供应商且至少一个启用模型（join 查询）；`GuideProgress.step` 上限 le=4→le=5；课程覆盖自动获取模型、默认/备用/优先级、沙盒试聊与 AI 摘要路由。
+- **操作文档 +3 篇**：Markdown 卡片（默认开启/权限/降级）、归档仓库自动移除、AI 自动获取模型；「验证群通知」课程 note 补卡片默认开启说明；App.vue 首次使用弹窗文案同步。
+- **去硬编码**：HelpView 步骤上限改 `setupLessons.length - 1`，「可稍后设置」改读后端 optional 字段，QQ 授权实图改按课程 `illustrations` 标记渲染。
+- 验证：新增 onboarding AI 步骤就绪测试、迁移 steps 数量断言 5→6；后端全量 pytest 通过（229 项）、Ruff 通过、前端构建通过；`prepare_release.py --tag v1.4.5` 校验通过。
+
 ## 2026-11-14 — AI 供应商自动获取模型（v1.4.4）
 
 - **自动导入**：`providers.py` 各供应商类新增 `list_models()`（OpenAI 兼容 `_models_endpoint` 兼容 /v1、/compatible-mode/v1 与完整 chat 端点写法）；`api/ai.py` 新增 `POST /providers/{id}/sync-models`——拉取、去重、过滤非对话模型（embed/tts/whisper/speech/dall-e/moderation/rerank/guard）、上限 100、跳过已存在（provider_id+model_name 唯一约束兜底），只新增不删改。

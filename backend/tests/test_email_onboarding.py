@@ -106,7 +106,7 @@ async def test_agent_auth_status_and_test_mail(client, admin_headers, monkeypatc
 
 async def test_first_run_progress_is_persistent_but_does_not_fake_readiness(client, admin_headers):
     state = (await client.get('/api/onboarding', headers=admin_headers)).json()
-    assert len(state["steps"]) == 5
+    assert len(state["steps"]) == 6
     await client.put('/api/onboarding', headers=admin_headers, json={"seen":True,"step":4})
     updated = (await client.get('/api/onboarding', headers=admin_headers)).json()
     assert updated["progress"] == {"seen":True,"step":4}

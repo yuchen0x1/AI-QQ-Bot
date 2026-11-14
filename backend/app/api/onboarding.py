@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models import Account, EmailAlert, SystemSetting, User
+from app.models import Account, AIModel, AIProvider, EmailAlert, SystemSetting, User
 from app.services.account_manager import account_manager
 from app.services.email_alerts import config as email_config
 from app.services.github.automation import subscription_status
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/onboarding", tags=["新手指引"])
 
 class GuideProgress(BaseModel):
     seen: bool = True
-    step: int = Field(default=0, ge=0, le=4)
+    step: int = Field(default=0, ge=0, le=5)
 
 
 @router.get("")
@@ -30,9 +30,14 @@ async def state(db: AsyncSession = Depends(get_db), user: User = Depends(get_cur
     mail_ok = bool(cfg.get("enabled") and cfg.get("recipient") and await db.scalar(
         select(EmailAlert.id).where(EmailAlert.status == "accepted", EmailAlert.recipient == cfg["recipient"],
                                    EmailAlert.provider == cfg["provider"]).limit(1)))
+    ai_ready = bool(await db.scalar(
+        select(AIModel.id).join(AIProvider, AIModel.provider_id == AIProvider.id)
+        .where(AIModel.enabled.is_(True), AIProvider.enabled.is_(True)).limit(1))) if permitted("ai:view") else False
     steps = [
         {"title": "连接 QQ 机器人", "path": "/accounts", "permission": "account:manage",
          "ready": any(account_manager.is_online(i) for i in accounts), "hint": "账号在线后继续"},
+        {"title": "配置 AI 模型", "path": "/ai", "permission": "ai:manage", "ready": ai_ready,
+         "hint": "添加供应商，保存后会自动获取模型列表，设一个默认模型即可"},
         {"title": "连接 GitHub 仓库", "path": "/github", "permission": "github:manage",
          "ready": bool(gh.get("connected") and gh.get("monitored_count")), "hint": "连接 Token，保存并同步仓库"},
         {"title": "绑定通知群并授权", "path": "/github", "permission": "push:manage",

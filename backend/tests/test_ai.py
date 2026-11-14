@@ -160,3 +160,11 @@ async def test_sync_models_reports_unreachable_provider(client: httpx.AsyncClien
     result = (await client.post(f"/api/ai/providers/{created.json()['id']}/sync-models", headers=admin_headers)).json()
     assert result["ok"] is False and result["created"] == 0
     assert "获取模型列表失败" in result["message"]
+
+
+async def test_onboarding_ai_step_ready_when_model_configured(client: httpx.AsyncClient, admin_headers: dict):
+    await _create_model(client, admin_headers, name="onboarding-guide-probe", model_name="gpt-test-chat")
+    state = (await client.get("/api/onboarding", headers=admin_headers)).json()
+    assert len(state["steps"]) == 6
+    step = next(s for s in state["steps"] if s["title"] == "配置 AI 模型")
+    assert step["ready"] is True and step["path"] == "/ai" and step["allowed"] is True
