@@ -1,6 +1,17 @@
 # TEST_REPORT
 
-## v1.4.6 发布：2026-11-15（日志保留可配置，默认 3 天）
+## v1.4.7 发布：2026-11-15（陈旧动态防迟到播报）
+
+| 状态 | 命令或范围 | 结果 |
+|---|---|---|
+| PASS | 生产案例诊断 | Family-Genealogy 通知实为 11-11~11-13 的旧推送迟到播报：committer 为用户自身凭据（另一 AI 代理项目所推），GitHub pushed_at=11-13 12:54 UTC、通知部分提交已不在任何分支；机器人数据库仅 11-14 16:03 一条 poll 事件记录 |
+| PASS | `pytest tests/test_github_notifications.py`（新增 1 项） | 2 天前的旧 PushEvent 不投递、不入库、跳过写系统日志；新鲜推送同一规则正常投递（对照） |
+| PASS | `pytest --tb=short -q`（backend 全量） | 231 项通过，0 失败（exit 0） |
+| PASS | `ruff check app tests migrations` | 通过 |
+| PASS | `prepare_release.py --tag v1.4.7` | 三件套版本一致、canonical notes 就绪 |
+| （待补） | Release 工作流 / 生产验收 | 随 tag v1.4.7 触发，结果待回填 |
+
+## v1.4.6 发布：2026-11-15（日志保留可配置，默认 3 天） 发布：2026-11-15（日志保留可配置，默认 3 天）
 
 | 状态 | 命令或范围 | 结果 |
 |---|---|---|

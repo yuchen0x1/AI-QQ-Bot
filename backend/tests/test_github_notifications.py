@@ -3,7 +3,7 @@
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -446,3 +446,40 @@ async def test_archived_repository_is_not_reimported_by_subscription_sync(
     assert config["sync_status"] == "ok", config
     assert config["monitored_count"] == 0
     assert not await db.scalar(select(GithubRepository).where(GithubRepository.full_name == "notifier/project-one"))
+
+
+async def test_stale_push_events_are_dropped_not_broadcast(
+    client, admin_headers, db, mock_account, notification_transport
+):
+    """GitHub 事件流迟到补发的旧推送（如升级重启后）不得迟到播报。"""
+    from app.models import GithubEvent
+    from app.services.logs import SystemLog
+
+    await configure(client, admin_headers, mock_account)
+    user_id = (await db.scalar(select(UserGithubToken).where(UserGithubToken.login == "notifier"))).user_id
+    await sync_subscription(db, user_id)
+    repo = await db.scalar(select(GithubRepository).where(GithubRepository.full_name == "notifier/project-one"))
+    gh = GithubClient(TOKEN)
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    fresh = datetime.now(timezone.utc).isoformat()
+
+    notification_transport["events"] = [
+        {"id": "900", "type": "PushEvent", "actor": {"login": "notifier"}, "created_at": old,
+         "payload": {"ref": "refs/heads/main", "before": "a" * 40, "head": "b" * 40,
+                     "commits": [{"id": "b" * 40, "message": "两天前的旧提交"}]}}]
+    stale = await sync_activity(db, repo, gh, notify=True)
+    assert stale["pushed"] == 0 and stale["new_events"] == 0
+    assert not any("两天前的旧提交" in item["message"] for item in account_manager.adapter(mock_account["id"]).outbox)
+
+    notification_transport["events"] = [
+        {"id": "901", "type": "PushEvent", "actor": {"login": "notifier"}, "created_at": fresh,
+         "payload": {"ref": "refs/heads/main", "before": "c" * 40, "head": "d" * 40,
+                     "commits": [{"id": "d" * 40, "message": "刚推送的新提交"}]}}]
+    fresh_result = await sync_activity(db, repo, gh, notify=True)
+    assert fresh_result["pushed"] == 1
+    assert any("刚推送的新提交" in item["message"] for item in account_manager.adapter(mock_account["id"]).outbox)
+    # 丢弃动作写系统日志，便于追溯
+    log = await db.scalar(select(SystemLog).where(SystemLog.message.like("%陈旧动态%")))
+    assert log is not None
+    rows = (await db.scalars(select(GithubEvent.id).where(GithubEvent.payload.like("%两天前的旧提交%")))).all()
+    assert not rows, "陈旧事件不得入库"

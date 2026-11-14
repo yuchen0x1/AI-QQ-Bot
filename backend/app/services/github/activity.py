@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -186,6 +186,15 @@ async def dispatch_activity(db: AsyncSession, repo: GithubRepository, event: Git
     return records
 
 
+def _parse_event_time(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 async def sync_activity(db: AsyncSession, repo: GithubRepository, client, *, notify: bool) -> dict[str, Any]:
     rows: list[dict] = []
     found = False
@@ -204,9 +213,17 @@ async def sync_activity(db: AsyncSession, repo: GithubRepository, client, *, not
     if initialized and cursor and not found and len(rows) >= 300:
         warning = "动态超过 GitHub 最近 300 条上限，可能存在缺口；请启用实时 Webhook"
     stats: dict[str, Any] = {"new_events": 0, "pushed": 0, "warning": warning}
+    # GitHub 事件流偶尔会迟到补发旧事件（比如升级重启后重新轮询），
+    # 超过 24 小时的动态直接丢弃，避免在群里迟到播报几天前的推送。
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    stale_skipped = 0
     for item in reversed(rows) if initialized and notify else []:
         event_type = POLL_TYPES.get(item.get("type"))
         if not event_type:
+            continue
+        created_at = _parse_event_time(item.get("created_at"))
+        if created_at is not None and created_at < stale_cutoff:
+            stale_skipped += 1
             continue
         payload = dict(item.get("payload") or {})
         payload["sender"] = item.get("actor") or {}
@@ -229,6 +246,15 @@ async def sync_activity(db: AsyncSession, repo: GithubRepository, client, *, not
         result = await ingest_activity(db, repo, event_type, payload, source="poll")
         stats["new_events"] += result["new_events"]
         stats["pushed"] += result["pushed"]
+    if stale_skipped:
+        from app.services.logs import write_log
+
+        await write_log(
+            db,
+            level="INFO",
+            category="github",
+            message=f"{repo.full_name} 跳过 {stale_skipped} 条超过 24 小时的陈旧动态，避免迟到播报",
+        )
     if rows:
         repo.activity_cursor = str(rows[0]["id"])
     repo.activity_initialized_at = repo.activity_initialized_at or datetime.now(timezone.utc)
