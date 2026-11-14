@@ -25,7 +25,7 @@ DEFAULT_SETTINGS: list[dict] = [
     {"key": "push_default_template", "value": DEFAULT_TEMPLATE, "description": "默认推送模板"},
     {"key": "panel_title", "value": "QBot 控制台", "description": "后台标题"},
     {"key": "auto_backup_keep", "value": 14, "description": "保留的备份数量"},
-    {"key": "data_retention_days", "value": 30, "description": "消息与日志数据保留天数（0 表示永久）"},
+    {"key": "data_retention_days", "value": 3, "description": "消息与日志数据保留天数（0 表示永久）"},
     {"key": "alert_webhook_url", "value": "", "description": "异常告警 Webhook 地址（支持飞书/钉钉/企业微信/通用）"},
     {"key": "alert_channel_type", "value": "auto", "description": "告警通道类型：auto/feishu/dingtalk/wechat/custom"},
 ]

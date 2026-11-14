@@ -1,6 +1,16 @@
 # TEST_REPORT
 
-## v1.4.5 发布：2026-11-14（新手指引六步升级）
+## v1.4.6 发布：2026-11-15（日志保留可配置，默认 3 天）
+
+| 状态 | 命令或范围 | 结果 |
+|---|---|---|
+| PASS | `pytest tests/test_data_retention.py tests/test_migrations.py`（新增 1 项） | 新装默认 `data_retention_days=3`；清理任务读设置 45 天仍生效；迁移 head 升至 0014（存量 30 翻转 3，显式值不动，兼容裸值与 {"value": x} 包装） |
+| PASS | `pytest --tb=short -q`（backend 全量） | 230 项通过，0 失败（exit 0） |
+| PASS | `ruff check app tests migrations`、`npm run build`（frontend） | 通过；LogsView 页头新增「日志保留」选择器（1/3/7/14/30/永久），带清理范围 tooltip，移动端自适应 |
+| PASS | `prepare_release.py --tag v1.4.6` | 三件套版本一致、canonical notes 就绪 |
+| （待补） | Release 工作流 / 生产验收 | 随 tag v1.4.6 触发，结果待回填 |
+
+## v1.4.5 发布：2026-11-14（新手指引六步升级） 发布：2026-11-14（新手指引六步升级）
 
 | 状态 | 命令或范围 | 结果 |
 |---|---|---|

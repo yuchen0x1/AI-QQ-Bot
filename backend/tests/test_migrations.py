@@ -17,7 +17,7 @@ from app.db.migrations import SchemaVersionError
 from app.db.session import SessionLocal
 from app.models import Base, BotCommand, Plugin, Role, SystemSetting, User
 
-HEAD = "0013_markdown_card_default_on"
+HEAD = "0014_retention_default_three"
 
 
 @pytest.fixture

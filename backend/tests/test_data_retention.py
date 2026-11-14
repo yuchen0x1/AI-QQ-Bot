@@ -112,6 +112,13 @@ async def _seed_old_rows(db) -> dict[str, int]:
     }
 
 
+async def test_retention_default_is_three_days(client, admin_headers) -> None:
+    """v1.4.6 起数据保留默认 3 天（界面可在系统日志页调整，0 表示永久）。"""
+    rows = (await client.get("/api/system/settings", headers=admin_headers)).json()
+    value = next(r["value"] for r in rows if r["key"] == "data_retention_days")
+    assert value == 3
+
+
 async def test_clean_expired_data_covers_growing_tables(db, client) -> None:
     from app.models import AIConversation, AuthSession, LoginAttempt, Message, PushRecord
 

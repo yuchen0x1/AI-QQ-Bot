@@ -206,11 +206,11 @@ async def _task_clean_expired_data(payload: dict[str, Any]) -> dict[str, Any]:
 
         days = payload.get("days")
         if days is None:
-            days = await read_setting(db, "data_retention_days", 30)
+            days = await read_setting(db, "data_retention_days", 3)
         try:
-            days = int(days) if days is not None else 30
+            days = int(days) if days is not None else 3
         except (TypeError, ValueError):
-            days = 30
+            days = 3
         if days <= 0:
             return {"status": "skipped", "reason": "retention disabled (days <= 0)"}
 
