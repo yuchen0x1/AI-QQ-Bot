@@ -13,7 +13,7 @@ from app.core.config import settings as app_settings
 from app.models import Account, GithubRelease, GithubRepository, PushRecord, PushRule
 from app.services.ai import service as ai_service
 from app.services.logs import write_log
-from app.services.templates import render_template, strip_markdown, truncate
+from app.services.templates import NOISE_ASSET_PATTERN, render_template, strip_markdown, truncate
 
 logger = logging.getLogger("qbot.github.push")
 
@@ -29,10 +29,10 @@ DEFAULT_TEMPLATE = """【GitHub 项目更新通知】
 更新日志：
 {release_url}
 
-下载地址：
-{downloads}
-
 机器人自动监控通知，请关注项目更新。"""
+# 下载与发布资产的信息已经在更新内容里（Release 正文的资产表转成了纯文本行），
+# 默认模板不再追加「下载地址」段，避免同一批链接在一条消息里出现两次。
+# 自定义模板仍可用 {downloads} 占位符。
 
 AI_SUMMARY_PROMPT = """你是开源项目的发布说明编辑。请阅读下面的 GitHub Release 内容，输出面向中文 QQ 群读者的简洁更新摘要。
 要求：
@@ -42,18 +42,23 @@ AI_SUMMARY_PROMPT = """你是开源项目的发布说明编辑。请阅读下面
 4. 如果原文信息极少，就如实概括，不要编造。"""
 
 
+# 自动更新器/校验清单等元数据文件对群读者是噪音；有正式安装包时不再逐个列出。
+
+
+def _asset_size(size: Any) -> str:
+    return f"{size / 1024 / 1024:.1f} MB" if size else "未知大小"
+
+
 def format_assets(assets: list[dict[str, Any]]) -> str:
     if not assets:
         return "暂无附件"
-    lines: list[str] = []
-    for asset in assets[:8]:
-        name = asset.get("name") or "未命名文件"
-        size = asset.get("size") or 0
-        size_mb = f"{size / 1024 / 1024:.1f} MB" if size else "未知大小"
-        url = asset.get("browser_download_url") or ""
-        lines.append(f"· {name}（{size_mb}）\n  {url}")
-    if len(assets) > 8:
-        lines.append(f"…… 另有 {len(assets) - 8} 个文件，请前往 Release 页面查看")
+    named = [(a.get("name") or "未命名文件", a.get("size") or 0) for a in assets]
+    main = [(n, s) for n, s in named if not NOISE_ASSET_PATTERN.search(n)]
+    if not main:  # 全是元数据文件（少见）：保留原清单
+        main = named
+    lines = [f"· {name}（{_asset_size(size)}）" for name, size in main[:8]]
+    if len(main) > 8:
+        lines.append(f"…… 另有 {len(main) - 8} 个文件，请前往 Release 页面查看")
     return "\n".join(lines)
 
 
@@ -117,6 +122,14 @@ async def generate_summary(db: AsyncSession, repo: GithubRepository, release: Gi
     return release.summary
 
 
+def _assets_covered(changelog: str, assets: list[dict[str, Any]]) -> bool:
+    """正文（或 AI 摘要）已经列出全部主要资产时，不再追加下载段，避免同一批链接出现两次。"""
+    main = [a.get("name") or "" for a in assets if a.get("name") and not NOISE_ASSET_PATTERN.search(a["name"])]
+    if not main:
+        return True
+    return all(name in changelog for name in main)
+
+
 async def build_message(
     db: AsyncSession, repo: GithubRepository, release: GithubRelease, rule: PushRule
 ) -> str:
@@ -126,10 +139,15 @@ async def build_message(
     changelog = summary or strip_markdown(release.body or "") or "本次发布未提供更新日志。"
     if rule.include_changelog is False:
         changelog = "（已关闭更新日志推送）"
-    if not rule.include_downloads:
+    downloads = format_assets(release.assets or [])
+    if rule.include_downloads is False:
         values_assets = "（已关闭下载地址推送）"
+    elif downloads and not _assets_covered(changelog, release.assets or []):
+        # 正文没列出资产（或 AI 摘要丢掉了资产表）时才追加，默认模板不再自带该段。
+        changelog = f"{changelog}\n\n下载与发布资产：\n{downloads}"
+        values_assets = ""
     else:
-        values_assets = None
+        values_assets = ""
     # 模板优先级：规则自带 → 系统设置 push_default_template → 内置默认。
     # 之前系统设置这一层从未被读取，管理员改了也不生效。
     template = rule.template
@@ -138,8 +156,7 @@ async def build_message(
 
         template = await read_setting(db, "push_default_template", None) or DEFAULT_TEMPLATE
     values = build_values(repo, release, changelog=truncate(changelog, 1000), summary=summary)
-    if values_assets is not None:
-        values["downloads"] = values_assets
+    values["downloads"] = values_assets
     message = render_template(template, values)
     if rule.mention_user_ids:
         mentions = " ".join(f"[CQ:at,qq={uid}]" for uid in rule.mention_user_ids if uid)
