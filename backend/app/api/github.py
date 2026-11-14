@@ -172,6 +172,8 @@ async def add_repo(payload: RepoCreate, db: AsyncSession = Depends(get_db), user
         )
     except RepositoryExistsError as exc:
         raise HTTPException(status_code=409, detail="该仓库已在监控列表中") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except GithubError as exc:
         raise HTTPException(
             status_code=400, detail=f"无法访问该仓库：{exc}。请确认仓库地址正确，私有仓库需要提供具有 repo 权限的 Token"

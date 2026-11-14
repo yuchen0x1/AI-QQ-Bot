@@ -67,6 +67,8 @@ async def create_monitored_repo(
 
     client = build_repository_provider(provider, token)
     info = await client.get_repo(owner, name)
+    if info.get("archived"):
+        raise ValueError(f"{owner}/{name} 已被作者归档（永久停止维护），无法添加监控")
 
     interval = poll_interval_seconds
     if interval is None:

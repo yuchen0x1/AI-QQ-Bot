@@ -190,12 +190,20 @@ def make_release(repo_id: int, tag: str = "v1.3.0") -> GithubRelease:
 
 
 async def test_release_render_produces_text_and_card(client, admin_headers, db):
+    from app.models import Account
+
     repo = make_repo("card-rel")
     db.add(repo)
     await db.flush()
     release = make_release(repo.id)
     db.add(release)
-    rule = PushRule(repository_id=repo.id, account_id=1, qq_group=123459789, event_types=["release"],
+    # 外键已启用：推送规则必须引用真实存在的账号。
+    account = Account(
+        account_id="card-rel-test", name="card-rel-test", qq_number=900003, protocol="qq_official", enabled=False
+    )
+    db.add(account)
+    await db.flush()
+    rule = PushRule(repository_id=repo.id, account_id=account.id, qq_group=123459789, event_types=["release"],
                     markdown_card=True, ai_summary=False)
     db.add(rule)
     await db.commit()

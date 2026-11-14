@@ -21,15 +21,15 @@ from app.services.github.notify import retry_failed_pushes
 TOKEN = "github_pat_test_notifications_only"
 
 
-def repo_payload(name):
+def repo_payload(name, *, archived=False):
     owner, name = name.split("/", 1)
     return {"full_name": f"{owner}/{name}", "name": name, "owner": {"login": owner},
-            "html_url": f"https://github.com/{owner}/{name}", "default_branch": "main"}
+            "html_url": f"https://github.com/{owner}/{name}", "default_branch": "main", "archived": archived}
 
 
 @pytest.fixture
 def notification_transport():
-    state = {"repos": ["notifier/project-one"], "events": [], "invalid": False, "hooks": []}
+    state = {"repos": ["notifier/project-one"], "events": [], "invalid": False, "hooks": [], "archived": set()}
 
     def handler(request):
         path = request.url.path
@@ -39,7 +39,8 @@ def notification_transport():
             return httpx.Response(200, json={"id": 881122, "login": "notifier"})
         if path == "/user/repos":
             page = int(request.url.params.get("page", 1))
-            return httpx.Response(200, json=[repo_payload(n) for n in state["repos"][(page-1)*100:page*100]])
+            return httpx.Response(200, json=[repo_payload(n, archived=n in state["archived"])
+                                             for n in state["repos"][(page-1)*100:page*100]])
         if path.endswith("/events"):
             page = int(request.url.params.get("page", 1))
             return httpx.Response(200, json=state["events"][(page-1)*100:page*100], headers={"X-Poll-Interval": "60"})
@@ -51,7 +52,8 @@ def notification_transport():
             state["hook_write"] = (request.method, json.loads(request.content))
             return httpx.Response(201, json={"id": 1})
         if path.startswith("/repos/") and len(path.split("/")) == 4:
-            return httpx.Response(200, json=repo_payload("/".join(path.split("/")[2:])))
+            name = "/".join(path.split("/")[2:])
+            return httpx.Response(200, json=repo_payload(name, archived=name in state["archived"]))
         return httpx.Response(404, json={"message": "Not Found"})
 
     set_transport(httpx.MockTransport(handler))
@@ -422,3 +424,25 @@ async def test_group_numbers_are_displayed_without_changing_routing(client, admi
     await db.commit()
     filtered = (await client.get('/api/github/push-records', headers=admin_headers, params={'qq_group': 123456789})).json()['items']
     assert any(r['id'] == record.id and r['qq_group_display'] == '123456789' for r in filtered)
+
+
+async def test_archived_repository_is_not_reimported_by_subscription_sync(
+    client, admin_headers, db, mock_account, notification_transport
+):
+    await configure(client, admin_headers, mock_account)
+    user_id = (await db.scalar(select(UserGithubToken).where(UserGithubToken.login == "notifier"))).user_id
+    await sync_subscription(db, user_id)
+    repo = await db.scalar(select(GithubRepository).where(GithubRepository.full_name == "notifier/project-one"))
+    assert repo is not None
+    # 轮询/Webhook 已自动移除（这里直接删行模拟），归档仓库不得被下次同步重新导入。
+    notification_transport["archived"].add("notifier/project-one")
+    await db.delete(repo)
+    await db.commit()
+    cfg = await read_config(db, user_id)
+    cfg["sync_requested"] = True
+    await save_config(db, user_id, cfg)
+    await sync_subscription(db, user_id)
+    config = await read_config(db, user_id)
+    assert config["sync_status"] == "ok", config
+    assert config["monitored_count"] == 0
+    assert not await db.scalar(select(GithubRepository).where(GithubRepository.full_name == "notifier/project-one"))

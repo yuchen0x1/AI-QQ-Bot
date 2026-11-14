@@ -63,7 +63,9 @@ def github_transport():
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/repos/octocat/hello":
-            return httpx.Response(200, json=REPO_PAYLOAD)
+            return httpx.Response(200, json={**REPO_PAYLOAD, "archived": bool(state.get("archived"))})
+        if path == "/repos/octocat/archived":
+            return httpx.Response(200, json={**REPO_PAYLOAD, "name": "archived", "full_name": "octocat/archived", "archived": True})
         if path.endswith("/releases"):
             return httpx.Response(200, json=state["releases"])
         if path.endswith("/tags"):
@@ -299,3 +301,72 @@ async def test_failed_push_then_retry(client: httpx.AsyncClient, admin_headers: 
     adapter = account_manager.adapter(offline_account["id"])
     assert any("v4.0.0" in item["message"] for item in adapter.outbox)
     await client.delete(f"/api/accounts/{offline_account['id']}", headers=admin_headers)
+
+
+async def test_archived_repo_auto_removed_on_check_and_group_notified(
+    client: httpx.AsyncClient, admin_headers: dict, mock_account: dict, github_transport: dict
+):
+    repo = await _add_repo(client, admin_headers)
+    rule = await client.post(
+        "/api/github/push-rules",
+        headers=admin_headers,
+        json={
+            "repository_id": repo["id"],
+            "account_id": mock_account["id"],
+            "qq_group": 900001,
+            "ai_summary": False,
+            "only_stable": True,
+            "mention_user_ids": [],
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    github_transport["archived"] = True
+
+    result = await client.post(f"/api/github/repos/{repo['id']}/check", headers=admin_headers)
+    assert result.status_code == 200
+    body = result.json()
+    assert body["ok"] is True
+    assert "已被作者归档" in body["message"] and "移出监控列表" in body["message"]
+
+    adapter = account_manager.adapter(mock_account["id"])
+    notice = next((item["message"] for item in adapter.outbox if "已被作者归档" in item["message"]), None)
+    assert notice is not None and "octocat/hello" in notice and "移出监控列表" in notice
+
+    listed = (await client.get("/api/github/repos", headers=admin_headers)).json()
+    assert repo["id"] not in {r["id"] for r in listed}
+    rules = (await client.get("/api/github/push-rules", headers=admin_headers)).json()
+    assert all(r["repository_id"] != repo["id"] for r in rules), "级联删除应清掉推送规则"
+
+
+async def test_webhook_archived_event_removes_monitoring(
+    client: httpx.AsyncClient, admin_headers: dict, mock_account: dict
+):
+    repo = await _add_repo(client, admin_headers)
+    secret = "whsec-archived"
+    await client.put(f"/api/github/repos/{repo['id']}", headers=admin_headers, json={"webhook_secret": secret})
+    body = json.dumps({"action": "archived", "repository": {"full_name": "octocat/hello", "archived": True}}).encode()
+    resp = await client.post(
+        f"/api/webhook/github/{repo['id']}",
+        content=body,
+        headers={
+            "x-github-event": "repository",
+            "x-github-delivery": "delivery-archived",
+            "x-hub-signature-256": _sign(secret, body),
+            "content-type": "application/json",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    result = resp.json()
+    assert result["removed"] is True and "归档" in result["message"]
+    listed = (await client.get("/api/github/repos", headers=admin_headers)).json()
+    assert repo["id"] not in {r["id"] for r in listed}
+
+
+async def test_add_archived_repo_rejected(client: httpx.AsyncClient, admin_headers: dict):
+    created = await client.post(
+        "/api/github/repos", headers=admin_headers, json={"url": "https://github.com/octocat/archived"}
+    )
+    assert created.status_code == 400, created.text
+    assert "已被作者归档" in created.json()["detail"]
+    listed = (await client.get("/api/github/repos", headers=admin_headers)).json()
+    assert all(r["full_name"] != "octocat/archived" for r in listed)

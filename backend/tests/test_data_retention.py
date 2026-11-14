@@ -28,9 +28,12 @@ async def _seed_old_rows(db) -> dict[str, int]:
         AuditLog,
         AuthSession,
         GithubEvent,
+        GithubRelease,
+        GithubRepository,
         LoginAttempt,
         Message,
         PushRecord,
+        PushRule,
         SystemLog,
         TaskRecord,
         User,
@@ -45,6 +48,19 @@ async def _seed_old_rows(db) -> dict[str, int]:
     db.add(account)
     await db.flush()
     user = await db.scalar(sa.select(User).where(User.username == "admin"))
+
+    # 外键已启用：推送记录种子必须引用真实存在的仓库/规则/发布。
+    repo = GithubRepository(
+        owner="retention", name="probe", full_name="retention/probe",
+        html_url="https://github.com/retention/probe", default_branch="main",
+    )
+    db.add(repo)
+    await db.flush()
+    release = GithubRelease(repository_id=repo.id, tag_name="v0.0.1-retention", html_url="https://github.com/retention/probe/releases/tag/v0.0.1-retention")
+    db.add(release)
+    rule = PushRule(repository_id=repo.id, account_id=account.id, qq_group=1, event_types=["release"])
+    db.add_all([release, rule])
+    await db.flush()
 
     msg_old = Message(account_id=account.id, direction="in", created_at=old)
     msg_new = Message(account_id=account.id, direction="in", created_at=fresh)
@@ -65,14 +81,14 @@ async def _seed_old_rows(db) -> dict[str, int]:
 
     db.add(LoginAttempt(username="retention-probe", ip="127.0.0.1", success=False, created_at=old))
     db.add(AuditLog(username="admin", action="x", detail="", ip="127.0.0.1", created_at=old))
-    db.add(GithubEvent(event_type="release", dedupe_key="retention-test-event", payload={}, created_at=old))
+    db.add(GithubEvent(repository_id=repo.id, event_type="release", dedupe_key="retention-test-event", payload={}, created_at=old))
 
     push_done = PushRecord(
-        repository_id=1, rule_id=1, release_id=1, account_id=account.id, qq_group=1,
+        repository_id=repo.id, rule_id=rule.id, release_id=release.id, account_id=account.id, qq_group=1,
         status="success", created_at=old,
     )
     push_pending = PushRecord(
-        repository_id=1, rule_id=2, release_id=1, account_id=account.id, qq_group=1,
+        repository_id=repo.id, rule_id=rule.id, release_id=None, account_id=account.id, qq_group=1,
         status="pending", created_at=old,
     )
     db.add_all([push_done, push_pending])

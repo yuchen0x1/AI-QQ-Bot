@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import GithubEvent, GithubRelease, GithubRepository
+from app.models import GithubEvent, GithubRelease, GithubRepository, PushRule
 from app.services.github.client import GithubClient, GithubError
 from app.services.github.oauth import resolve_repo_token
 from app.services.github.provider import build_repository_provider
@@ -196,6 +196,48 @@ async def sync_releases(
     return new_releases
 
 
+async def remove_archived_repository(db: AsyncSession, repo: GithubRepository, *, source: str) -> dict[str, int]:
+    """仓库被作者归档（永久停止维护）时：尽力通知绑定群，再移出监控列表。
+
+    与网页手动删除一致：仓库行级联删除其版本、动态、推送规则与推送记录；
+    通知失败只记日志，绝不阻塞移除本身。
+    """
+    from app.services.account_manager import account_manager
+    from app.services.scheduler import scheduler_service
+
+    message = (
+        f"【监控通知】\n仓库 {repo.full_name} 已被作者归档（永久停止维护），"
+        "不会再有新版本或动态。\n机器人已自动将其移出监控列表。"
+    )
+    notified = 0
+    try:
+        rules = list(
+            await db.scalars(select(PushRule).where(PushRule.repository_id == repo.id, PushRule.enabled.is_(True)))
+        )
+        destinations = sorted({(rule.account_id, rule.qq_group) for rule in rules if rule.qq_group})
+        for account_id, qq_group in destinations:
+            try:
+                if account_manager.is_online(account_id):
+                    await account_manager.send_group_message(account_id, qq_group, message)
+                    notified += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("归档通知发送失败 %s -> 群 %s：%s", repo.full_name, qq_group, exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("归档通知准备失败 %s：%s", repo.full_name, exc)
+    scheduler_service.unschedule_repo(repo.id)
+    await db.delete(repo)
+    await db.commit()
+    await write_log(
+        db,
+        level="INFO",
+        category="github",
+        message=f"{repo.full_name} 已被作者归档（永久停止维护），自动移出监控列表"
+        + (f"，已通知 {notified} 个通知群" if notified else ""),
+        context={"repo": repo.full_name, "source": source},
+    )
+    return {"notified": notified}
+
+
 async def check_repository(
     db: AsyncSession, repo: GithubRepository, *, notify: bool = True, client: GithubClient | None = None
 ) -> dict[str, Any]:
@@ -212,6 +254,14 @@ async def check_repository(
     }
     try:
         info = await client.get_repo(repo.owner, repo.name)
+        if info.get("archived"):
+            outcome = await remove_archived_repository(db, repo, source="poll")
+            result["ok"] = True
+            result["removed"] = True
+            result["message"] = f"{repo.full_name} 已被作者归档（永久停止维护），已自动移出监控列表" + (
+                f"，已通知 {outcome['notified']} 个通知群" if outcome["notified"] else ""
+            )
+            return result
         repo.description = info.get("description") or repo.description
         repo.default_branch = info.get("default_branch") or repo.default_branch
         repo.language = info.get("language") or repo.language
@@ -299,6 +349,15 @@ async def handle_webhook_payload(
     event_type: str = "release",
 ) -> dict[str, Any]:
     """处理 GitHub Webhook 事件：验签已在路由层完成。"""
+    if event_type == "repository" and payload.get("action") == "archived":
+        outcome = await remove_archived_repository(db, repo, source="webhook")
+        return {
+            "ok": True,
+            "new_releases": 0,
+            "removed": True,
+            "message": f"{repo.full_name} 已被作者归档，自动移出监控列表"
+            + (f"，已通知 {outcome['notified']} 个通知群" if outcome["notified"] else ""),
+        }
     if event_type == "repository" and payload.get("action") in {"deleted", "transferred"}:
         from app.services.github.automation import reconcile_rules
         from app.services.scheduler import scheduler_service

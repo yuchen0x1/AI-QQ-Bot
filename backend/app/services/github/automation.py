@@ -366,6 +366,9 @@ async def sync_subscription(db: AsyncSession, user_id: int) -> None:
         await reconcile_rules(db, user_id)
         effective_interval = max(value["poll_interval_seconds"], math.ceil(len(items) * 3 * 3600 / 3000))
         for item in items:
+            if item.get("archived"):
+                # 归档（永久停止维护）仓库不纳入监控；存量监控由轮询 / Webhook 自动移除。
+                continue
             full_name = item["full_name"]
             try:
                 repo = await db.scalar(select(GithubRepository).where(GithubRepository.full_name.ilike(full_name)))
