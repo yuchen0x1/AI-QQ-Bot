@@ -1,5 +1,16 @@
 # TEST_REPORT
 
+## v1.4.1 发布：2026-11-14（升级服务国内镜像加速）
+
+| 状态 | 命令或范围 | 结果 |
+|---|---|---|
+| PASS | `pytest tests/test_self_update.py`（24 项，新增 8 项） | 镜像条目过滤（http/凭据/非 443/带路径被忽略）、download_sources 镜像优先 + 直连兜底；镜像网络失败回退直连、digest 不匹配换源重下、全部源耗尽报错且不留残留文件；镜像重定向白名单（仅镜像主机 ∪ GitHub 主机，http/跨域/非常规端口拒绝）；`fetch_release` 瞬时网络错误重试一次、HTTP 404 不重试 |
+| PASS | `pytest -q`（backend 全量） | 219 项通过，0 失败，1 项既有跳过（共 220 项；exit 0，本机终端不回显 summary 行） |
+| PASS | `ruff check app tests migrations`、`ruff check scripts/updater` | 通过 |
+| PASS | `prepare_release.py --tag v1.4.1` | 三件套版本一致、canonical notes 就绪 |
+| PASS | 镜像真实连通性（生产服务器） | 见下方部署记录 |
+| （待补） | Release 工作流 | 随 tag v1.4.1 触发，结果待回填 |
+
 ## v1.4.0 发布：2026-11-14（GitHub 通知官方 Markdown 卡片）
 
 | 状态 | 命令或范围 | 结果 |

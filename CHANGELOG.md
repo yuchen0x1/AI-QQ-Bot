@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 2026-11-14 — 升级服务国内镜像加速（v1.4.1）
+
+- **下载镜像**：原生升级服务 `/etc/qbot/updater.json` 新增 `download_mirrors`——升级包按 gh-proxy 风格前缀镜像逐源下载（每源独立 300s 超时），全部失败自动回退 GitHub 直连；镜像仅作传输通道，SHA-256 digest 仍以直连 `api.github.com` 的元数据为锚，重定向白名单扩展为「镜像主机 ∪ GitHub 主机」，非法镜像条目启动时被忽略。
+- **pip 镜像**：新增 `pip_index_url`，依赖安装（`build_environment.py`）按该 PyPI 镜像源执行；镜像校验同 allowed_url 规则（HTTPS、无凭据）。
+- **元数据重试**：`fetch_release` 对 URLError/超时/连接重置自动重试一次，HTTP 4xx/5xx 等确定性错误不重试。
+- **部署提示**：宿主机升级服务代码不随网页升级更新，需管理员将 `scripts/updater/daemon.py`、`build_environment.py` 复制到 `/usr/local/lib/qbot-updater/` 并重启 `qbot-updater` 后配置生效（见 `docs/AUTO_UPDATE.md` 国内服务器加速章节）。
+- 验证：新增 `tests/test_self_update.py` 8 项（镜像 URL 构造/非法条目过滤、镜像失败回退直连、digest 不匹配换源、重定向白名单、元数据重试与 HTTP 错误不重试）；后端全量 pytest 通过、Ruff 通过（含 scripts/updater）。
+
 ## 2026-11-14 — GitHub 通知官方 Markdown 卡片（v1.4.0）
 
 - **卡片渲染**：新增 `app/services/github/card.py`——代码推送渲染标题 / 分支 / 提交内容 / 变化文件 / 行数统计 / 提交信息的官方原生 Markdown 深色卡片（msg_type=2）+ keyboard 跳转按钮；Issue、PR、Star 等动态走通用卡片；版本发布通知经 `render_release_message` 双产出（纯文本 + 卡片数据）。
