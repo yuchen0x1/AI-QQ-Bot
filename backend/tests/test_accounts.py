@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 import httpx
 
 from app.services.account_manager import account_manager
@@ -57,6 +59,23 @@ async def test_sync_groups_and_members(client: httpx.AsyncClient, admin_headers:
     member_list = await client.get(f"/api/groups/{group['id']}/members", headers=admin_headers)
     assert member_list.status_code == 200
     assert member_list.json()["total"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_sync_groups_concurrent_calls_do_not_duplicate(db, mock_account: dict):
+    """启动自动同步与手动同步并发时，群行不得重复、不得撞唯一约束。"""
+    from sqlalchemy import select
+
+    from app.models import Group
+
+    await asyncio.gather(
+        account_manager.sync_groups(mock_account["id"]),
+        account_manager.sync_groups(mock_account["id"]),
+        account_manager.sync_groups(mock_account["id"]),
+    )
+    numbers = sorted(g.group_number for g in await db.scalars(select(Group).where(Group.account_id == mock_account["id"])))
+    assert numbers == sorted(set(numbers)), f"群行出现重复：{numbers}"
+    assert 900001 in numbers and 900002 in numbers
 
 
 async def test_group_action_permission_and_capability(

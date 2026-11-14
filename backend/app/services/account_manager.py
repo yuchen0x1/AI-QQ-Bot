@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import AdapterError, QQAdapter, UnsupportedAction
@@ -476,23 +478,54 @@ class AccountManager:
         groups = await adapter.get_group_list()
         async with SessionLocal() as db:
             count = 0
+            # 启动时的自动同步与用户手动同步可能并发执行，先查后插会撞
+            # (account_id, group_number) 唯一约束；改用 ON CONFLICT 幂等写入。
+            dialect_insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+            now = datetime.now(timezone.utc)
             for item in groups:
                 number = int(item.get("group_id") or 0)
                 if not number:
                     continue
+                name = item.get("group_name") or ""
+                member_count = int(item.get("member_count") or 0)
+                max_member_count = int(item.get("max_member_count") or 0)
+                owner_id = item.get("owner_id") or ""
                 group = await db.scalar(
                     select(Group).where(Group.account_id == account_db_id, Group.group_number == number)
                 )
                 if not group:
-                    group = Group(account_id=account_db_id, group_number=number)
-                    db.add(group)
-                    await db.flush()
-                    db.add(GroupSettings(group_id=group.id))
-                group.name = item.get("group_name") or group.name
-                group.member_count = int(item.get("member_count") or group.member_count or 0)
-                group.max_member_count = int(item.get("max_member_count") or group.max_member_count or 0)
-                group.owner_id = item.get("owner_id") or group.owner_id
-                group.last_synced_at = datetime.now(timezone.utc)
+                    insert_values: dict[str, Any] = {
+                        "account_id": account_db_id,
+                        "group_number": number,
+                        "name": name,
+                        "member_count": member_count,
+                        "max_member_count": max_member_count,
+                        "last_synced_at": now,
+                    }
+                    if owner_id:
+                        insert_values["owner_id"] = owner_id
+                    stmt = (
+                        dialect_insert(Group)
+                        .values(**insert_values)
+                        .on_conflict_do_nothing(index_elements=["account_id", "group_number"])
+                        .returning(Group.id)
+                    )
+                    new_id = await db.scalar(stmt)
+                    if new_id:
+                        db.add(GroupSettings(group_id=new_id))
+                        group = await db.get(Group, new_id)
+                    else:
+                        # 另一个连接刚刚建好了这一行，读取后走更新路径
+                        group = await db.scalar(
+                            select(Group).where(Group.account_id == account_db_id, Group.group_number == number)
+                        )
+                if not group:
+                    continue
+                group.name = name or group.name
+                group.member_count = member_count or group.member_count or 0
+                group.max_member_count = max_member_count or group.max_member_count or 0
+                group.owner_id = owner_id or group.owner_id
+                group.last_synced_at = now
                 count += 1
             await db.commit()
             await write_log(
