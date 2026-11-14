@@ -1,5 +1,15 @@
 # TEST_REPORT
 
+## v1.4.0 发布：2026-11-14（GitHub 通知官方 Markdown 卡片）
+
+| 状态 | 命令或范围 | 结果 |
+|---|---|---|
+| PASS | `pytest tests/test_github_card.py`（11 项） | push 卡片数据采集、keyboard 约束（≤5 行 × ≤5 按钮 / id 唯一 / 跳转按钮字段）、代码块围栏中和、存量事件回退；发布卡片渲染与开关联动、投递发卡、失败记录重试仍发卡、卡片被拒自动降级纯文本 |
+| PASS | `pytest -q`（backend 全量） | **211 项通过，0 失败，1 项既有跳过**（共 212 项） |
+| PASS | `ruff check app tests migrations`、`npm run build`（frontend） | 通过 |
+| PASS | 报文预览核对 | push 卡片与官方 msg_type=2 + keyboard 报文一致（rows/buttons/permission/unsupport_tips）；发布卡片含更新内容、下载资产与「仓库主页 / 发布页」按钮 |
+| PASS | `prepare_release.py --tag v1.4.0`、Ruff、前端构建、Release 工作流 | 见下方本地预检记录；CI 结果随发布流水线确认 |
+
 ## v1.3.1 发布：2026-11-14（图表遮挡 / 空错误吐司 / 通知排版 / 群同步并发）
 
 | 状态 | 命令或范围 | 结果 |
