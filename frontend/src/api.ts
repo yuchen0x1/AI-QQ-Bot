@@ -20,7 +20,11 @@ api.interceptors.response.use((response) => response, (error) => {
     localStorage.removeItem('qbot_token')
     location.href = '/login'
   } else if (status !== 401 && !(localStorage.getItem('qbot_upgrade_pending') && Date.now() - Number(localStorage.getItem('qbot_upgrade_pending_since') || 0) < 1200000 && (!status || status === 502 || status === 503))) {
-    ElMessage.error(error?.response?.data?.detail || error?.message || '请求失败')
+    const raw = error?.response?.data?.detail
+    const msg = typeof raw === 'string' && raw ? raw
+      : Array.isArray(raw) && raw.length ? String((raw[0] as any)?.msg || '请求参数错误')
+      : (typeof error?.message === 'string' && error.message ? error.message : '请求失败')
+    ElMessage.error(msg)
   }
   return Promise.reject(error)
 })

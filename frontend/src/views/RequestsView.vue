@@ -1,7 +1,7 @@
 <template>
   <div class="page-heading">
     <div><div class="eyebrow">REQUEST REVIEW</div><h1>申请审核</h1><p>查看历史申请与处理结果；审批操作按机器人实际开放的接口能力提供</p></div>
-    <el-button :icon="Refresh" @click="load">刷新</el-button>
+    <el-button :icon="Refresh" @click="load()">刷新</el-button>
   </div>
   <section class="surface resource-surface">
     <div class="resource-toolbar">
