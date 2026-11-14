@@ -1,5 +1,22 @@
 # TEST_REPORT
 
+## 生产在线升级验收：2026-11-14（v1.1.0 → v1.3.0，真实宿主机）
+
+| 状态 | 范围 | 结果 |
+|---|---|---|
+| PASS | 管理台「系统设置 → 在线更新 → 立即升级」（真实管理员操作，管理员密码不在环境变量/源码中出现） | 触发任务 `72e7521d-e8d9-48e0-95e5-7ca1ef8c77fd`，POST /api/system/update/install → Unix socket → qbot-updater 守护进程 |
+| PASS | 升级任务持久化 | `/var/lib/qbot-updater/jobs/72e7521d….json/.log/.tar.gz`：status=succeeded、phase=complete、progress=100、「升级成功」；previous_release=`20261114-upgrade-entry` → new_release=`v1.3.0-72e7521d…` |
+| PASS | 升级前数据库备份 | `/var/lib/qbot-updater/backups/upgrade-72e7521d….db`（1.4MB，root 独占 0600），与运行数据目录分离 |
+| PASS | 实际版本 | 健康检查（本机 8000 与公网 HTTPS）均为 `{"status":"ok","database":true,"version":"1.3.0"}`；`/opt/qbot/current` 已指向 v1.3.0 release |
+| PASS | 服务中断窗口 | journal 时间线：14:34:23 停止 → 14:34:25 启动 → 14:34:27 迁移确认 0011_official_only → 调度器恢复（2 自定义任务 + 25 仓库轮询 + 共 29 任务）→ 14:34:29 管理台 WebSocket 自动重连；全程约 4 秒 |
+| PASS | 账号 | 「生产机器人账号」qq_official / official_ws，enabled、auto_reconnect、AppSecret/AccessToken 密文（gAAAAAB…）原样保留；uvicorn 进程与 `api.sgroup.qq.com`（175.27.5.112:443，DNS 解析核对）保持 established TLS 连接，机器人真实在线 |
+| PASS | 群绑定与身份映射 | groups 13、qq_official_identities 17，与升级前一致 |
+| PASS | 仓库与通知群 | github_repositories 26、github_notification_targets 4 |
+| PASS | 邮件授权 | email_alerts 3 行保留，`/var/lib/qbot/agent-mail` 授权目录原样 |
+| PASS | 升级入口复用性 | qbot 与 qbot-updater 双服务 active；后续版本可直接后台一键升级，无需再次 install.py |
+
+验收备注：本次为 v1.3.0 发布后首次「从旧版本通过网页一键升级到正式版」的完整线上验收，下载（GitHub CDN 约 8 分钟）、依赖安装（约 10 分钟，国内网络）、切换与恢复均由升级器自主完成，无人工干预。过程中曾误将公钥写到另一台实验室机器（实验室机，内网地址），经主机指纹核对后确认生产机为 生产机 并完成 SSH 密钥恢复。
+
 ## 路线图收口：2026-11-14（v1.3.0 发布、跨实例广播、容器验收、插件可观测性）
 
 | 状态 | 命令或范围 | 结果 |
@@ -47,9 +64,9 @@
 
 ## 服务器验收：2026-11-14（公网部署与迁移）
 
-- PASS：`https://xiaoshuo.lenmo.top/api/system/health` 返回 200，数据库正常；HTTP 跳转 HTTPS，未登录访问账号 API 返回 401，`.env` 路径返回 403。
+- PASS：`https://your-domain.example/api/system/health` 返回 200，数据库正常；HTTP 跳转 HTTPS，未登录访问账号 API 返回 401，`.env` 路径返回 403。
 - PASS：Ubuntu 原生 Python 3.12 + systemd + Nginx 部署，后端仅监听 `127.0.0.1:8000`；qbot 设置开机启动，重启服务后机器人自动在线、邮件授权保留。
-- PASS：Let’s Encrypt 证书已签发；`certbot renew --dry-run --cert-name xiaoshuo.lenmo.top --non-interactive` 模拟续期成功，续期定时器与 Nginx 重载 hook 已配置。
+- PASS：Let’s Encrypt 证书已签发；`certbot renew --dry-run --cert-name your-domain.example --non-interactive` 模拟续期成功，续期定时器与 Nginx 重载 hook 已配置。
 - PASS：迁移前停止本地机器人与调度器，使用 SQLite backup API 留存完整备份并迁移。保留 1 个账号、13 个群、17 个身份映射、26 条仓库历史记录、4 个通知群、103 条规则、63 条迁移前推送记录；当前可访问并监控仓库为 25。迁移副本仅调整生产管理员密码、登录会话和连接租约。
 - PASS：QQ 开放平台已加入服务器 IPv4 白名单；4 个通知群主动权限均从真实官方 API 确认已允许，GitHub 授权和仓库同步正常。
 - PASS：服务器独立完成腾讯 Agent Mail 授权，发信账号为后台设置的地址，测试邮件被发信服务接受；未将接口接受等同于最终收件箱投递。
@@ -67,7 +84,7 @@
 | PASS | 本地 API / OpenAPI | 只接受 `qq_official`；连接模式仅 WebSocket / Webhook；旧接收与扫码接口返回 404，非官方协议创建请求返回 422 |
 | PASS | Playwright / 本机 Edge，1440px / 390px | 创建与编辑表单只展示官方字段，无第三方或模拟选项、无扫码入口；两种官方回调模式正常切换，编辑密钥保持空白，无水平溢出或页面脚本错误 |
 | PASS | 数据库副本迁移与本地重启 | 先备份、在副本升级 `0011_official_only`，再启动本地服务自动升级；官方账号 1、群 13、身份映射 17、通知目标 4、规则 103、推送记录 55 均保留；SQLite integrity_check 为 ok |
-| PASS | 本地真实官方连接 | 重启后冷漠管家以 `official_ws` 自动恢复在线；本轮未额外向群发送测试消息 |
+| PASS | 本地真实官方连接 | 重启后生产机器人账号以 `official_ws` 自动恢复在线；本轮未额外向群发送测试消息 |
 | PASS | `docker compose --env-file .env.example config --no-env-resolution --quiet` | 示例配置解析通过；不读取尚未创建的部署 `.env`，不代表已构建或启动容器 |
 | PASS | `python scripts/package_server.py` 与 ZIP 清单检查 | 199 个文件，旧生产接入文件均不在包中，官方适配器、迁移和 3 张教学图片存在，无本地数据库或 `.env` |
 
@@ -105,7 +122,7 @@
 | PASS | `python -m ruff check app/adapters/qq_official.py app/services/account_manager.py app/services/github/automation.py app/services/github/notify.py app/api/github_notifications.py tests/test_qq_official.py tests/test_github_notifications.py`（backend） | All checks passed |
 | PASS | `npm run build`（frontend） | Vue 类型检查和 Vite 生产构建通过 |
 | PASS | `git diff --check` | 无空白错误，仅现有 LF/CRLF 提醒 |
-| PASS | 官方 QQ 群授权与实际补发 | 群 1016190748 的 `allow_proactive_msg` 从 false 变为 true；23 条积压通知均补发成功并获得消息 ID |
+| PASS | 官方 QQ 群授权与实际补发 | 群 123456789 的 `allow_proactive_msg` 从 false 变为 true；23 条积压通知均补发成功并获得消息 ID |
 | PASS | 浏览器检查通知页面 | 真实后台展示群号、近 7 天投递计数、主动权限与检查时间；「检查群权限」调用实际官方接口 |
 | PARTIAL | 未来 GitHub 动态、公网部署 | 本地轮询已运行，真实动态检测和失败后补发已确认；本轮未新建远程事件验证下一次自动投递，未部署公网 HTTPS Webhook |
 
