@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -166,6 +167,55 @@ async def test_provider(
         return {"ok": True, "message": f"连接成功：{(result.content or '').strip()[:50]}", "latency_ms": result.latency_ms}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "message": f"连接失败：{exc}"}
+
+
+# 纯文本/向量/音频等非对话模型不进入路由表，避免自动导入污染优先级列表。
+NON_CHAT_MODEL_RE = re.compile(r"embed|tts|whisper|speech|dall-e|dalle|moderation|rerank|guard", re.I)
+MAX_SYNC_MODELS = 100
+
+
+async def _sync_provider_models(db: AsyncSession, provider: AIProvider) -> dict:
+    """拉取供应商模型列表并把缺失的模型补进已配置列表；不删除/修改已有模型。"""
+    try:
+        client = build_provider(
+            provider.kind,
+            base_url=provider.base_url,
+            api_key=decrypt_secret(provider.api_key_enc),
+            model_name="probe",
+            timeout=30,
+        )
+        names = [name for name in await client.list_models() if not NON_CHAT_MODEL_RE.search(name)]
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "fetched": 0, "created": 0, "existing": 0, "message": f"获取模型列表失败：{exc}"}
+    names = list(dict.fromkeys(name.strip() for name in names if 0 < len(name.strip()) <= 120))[:MAX_SYNC_MODELS]
+    existing = set(await db.scalars(select(AIModel.model_name).where(AIModel.provider_id == provider.id)))
+    created = 0
+    for name in names:
+        if name in existing:
+            continue
+        db.add(AIModel(provider_id=provider.id, model_name=name))
+        created += 1
+    if created:
+        await db.commit()
+    if not names:
+        return {"ok": True, "fetched": 0, "created": 0, "existing": 0, "message": "供应商未返回模型列表，可稍后重试"}
+    return {
+        "ok": True,
+        "fetched": len(names),
+        "created": created,
+        "existing": len(names) - created,
+        "message": f"获取到 {len(names)} 个可用模型，新增 {created} 个" + (f"（已有 {len(names) - created} 个）" if created else "，全部已配置"),
+    }
+
+
+@router.post("/providers/{provider_id}/sync-models")
+async def sync_provider_models(
+    provider_id: int, db: AsyncSession = Depends(get_db), _: User = Depends(require("ai:manage"))
+):
+    provider = await db.get(AIProvider, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="供应商不存在")
+    return await _sync_provider_models(db, provider)
 
 
 # ---------------------------------------------------------------------------

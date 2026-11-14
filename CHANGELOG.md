@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 2026-11-14 — AI 供应商自动获取模型（v1.4.4）
+
+- **自动导入**：`providers.py` 各供应商类新增 `list_models()`（OpenAI 兼容 `_models_endpoint` 兼容 /v1、/compatible-mode/v1 与完整 chat 端点写法）；`api/ai.py` 新增 `POST /providers/{id}/sync-models`——拉取、去重、过滤非对话模型（embed/tts/whisper/speech/dall-e/moderation/rerank/guard）、上限 100、跳过已存在（provider_id+model_name 唯一约束兜底），只新增不删改。
+- **前端**：供应商保存后自动触发拉取并提示导入数量；卡片新增「获取模型」按钮（带 loading），失败提示原因可重试。
+- 验证：新增 2 项测试（拉取过滤+去重+默认参数、不可达供应商明确报错）；后端全量 pytest 通过、Ruff 通过、前端构建通过；`prepare_release.py --tag v1.4.4` 校验通过。
+
 ## 2026-11-14 — 归档卡片崩溃修复与卡片默认开启（v1.4.3）
 
 - **崩溃修复**：`normalize_activity` 的 create/delete（创建/删除分支或标签）分支漏赋 `card`，仓库出现此类事件后每轮检查都抛 `UnboundLocalError` 并触发告警邮件（生产 PROJECT-NEXUS 每 5 分钟一次）。补上活动卡片数据，积压事件升级后自动消化。

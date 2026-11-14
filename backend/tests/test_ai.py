@@ -15,6 +15,13 @@ def ai_transport():
     """所有 AI / GitHub 请求都被本地 MockTransport 拦截，绝不访问外网。"""
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/models"):
+            if "unreachable" in (request.url.host or ""):
+                return httpx.Response(401, json={"error": {"message": "invalid api key"}})
+            return httpx.Response(200, json={"data": [
+                {"id": "gpt-test-chat"}, {"id": "gpt-test-mini"},
+                {"id": "text-embedding-3-small"}, {"id": "tts-1"},
+            ]})
         body = json.loads(request.content or b"{}")
         model = body.get("model", "")
         if model.startswith("broken"):
@@ -121,3 +128,35 @@ async def test_chat_without_model(client: httpx.AsyncClient, admin_headers: dict
     )
     # 指定模型不存在时回落到默认模型
     assert resp.status_code in (200, 400)
+
+
+async def test_sync_models_imports_and_dedupes(client: httpx.AsyncClient, admin_headers: dict):
+    created = await client.post(
+        "/api/ai/providers",
+        headers=admin_headers,
+        json={"name": "sync-probe", "kind": "custom", "base_url": "https://ai.example.com/v1", "api_key": "sk-sync-test-key-123"},
+    )
+    assert created.status_code == 201, created.text
+    provider_id = created.json()["id"]
+    first = (await client.post(f"/api/ai/providers/{provider_id}/sync-models", headers=admin_headers)).json()
+    assert first["ok"] is True, first
+    # text-embedding / tts 等非对话模型被过滤，只导入 2 个聊天模型
+    assert first["fetched"] == 2 and first["created"] == 2, first
+    second = (await client.post(f"/api/ai/providers/{provider_id}/sync-models", headers=admin_headers)).json()
+    assert second["created"] == 0 and second["existing"] == 2, second
+    models = (await client.get("/api/ai/models", headers=admin_headers)).json()
+    mine = {m["model_name"]: m for m in models if m["provider_id"] == provider_id}
+    assert set(mine) == {"gpt-test-chat", "gpt-test-mini"}
+    assert all(m["enabled"] and m["priority"] == 100 and not m["is_default"] for m in mine.values())
+
+
+async def test_sync_models_reports_unreachable_provider(client: httpx.AsyncClient, admin_headers: dict):
+    created = await client.post(
+        "/api/ai/providers",
+        headers=admin_headers,
+        json={"name": "sync-unreachable", "kind": "custom", "base_url": "https://unreachable.example.com/v1", "api_key": "sk-x"},
+    )
+    assert created.status_code == 201, created.text
+    result = (await client.post(f"/api/ai/providers/{created.json()['id']}/sync-models", headers=admin_headers)).json()
+    assert result["ok"] is False and result["created"] == 0
+    assert "获取模型列表失败" in result["message"]

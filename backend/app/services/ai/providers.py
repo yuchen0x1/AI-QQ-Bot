@@ -115,6 +115,25 @@ class BaseAIProvider:
         data["_elapsed_ms"] = elapsed
         return data
 
+    async def _get(self, url: str, *, headers: dict[str, str]) -> dict[str, Any]:
+        try:
+            async with new_client(timeout=self.timeout) as client:
+                response = await client.get(url, headers={**self.extra_headers, **headers})
+        except httpx.TimeoutException as exc:
+            raise AITimeout(f"请求超时（{self.timeout}s）：{exc}") from exc
+        except httpx.HTTPError as exc:
+            raise AIError(f"网络错误：{exc}") from exc
+        if response.status_code >= 400:
+            raise AIError(f"HTTP {response.status_code}: {response.text[:500]}")
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise AIError("返回内容不是合法 JSON") from exc
+
+    async def list_models(self) -> list[str]:
+        """拉取供应商可用模型 ID 列表；未实现的供应商返回空列表。"""
+        return []
+
 
 class OpenAICompatibleProvider(BaseAIProvider):
     """OpenAI / DeepSeek / Qwen / Moonshot / 自定义兼容接口。"""
@@ -126,6 +145,28 @@ class OpenAICompatibleProvider(BaseAIProvider):
         if base.endswith("/v1") or base.endswith("/compatible-mode/v1"):
             return f"{base}/chat/completions"
         return f"{base}/v1/chat/completions"
+
+    def _models_endpoint(self) -> str:
+        base = self.base_url
+        if base.endswith("/chat/completions"):
+            base = base[: -len("/chat/completions")]
+        if base.endswith("/v1") or base.endswith("/compatible-mode/v1"):
+            return f"{base}/models"
+        return f"{base}/v1/models"
+
+    async def list_models(self) -> list[str]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        data = await self._get(self._models_endpoint(), headers=headers)
+        rows = data.get("data") or data.get("models") or []
+        names: list[str] = []
+        for row in rows:
+            if isinstance(row, str):
+                names.append(row)
+            elif isinstance(row, dict):
+                names.append(str(row.get("id") or row.get("name") or ""))
+        return [name.strip() for name in names if name.strip()]
 
     async def chat(self, messages: list[dict[str, str]], system: str | None = None) -> ChatResult:
         payload_messages: list[dict[str, str]] = []
@@ -165,6 +206,17 @@ class OpenAICompatibleProvider(BaseAIProvider):
 
 
 class AnthropicProvider(BaseAIProvider):
+    async def list_models(self) -> list[str]:
+        data = await self._get(
+            f"{self.base_url}/v1/models",
+            headers={"x-api-key": self.api_key or "", "anthropic-version": "2023-06-01"},
+        )
+        return [
+            str(row["id"]).strip()
+            for row in (data.get("data") or [])
+            if isinstance(row, dict) and row.get("id")
+        ]
+
     async def chat(self, messages: list[dict[str, str]], system: str | None = None) -> ChatResult:
         headers = {
             "Content-Type": "application/json",
@@ -194,6 +246,17 @@ class AnthropicProvider(BaseAIProvider):
 
 
 class GeminiProvider(BaseAIProvider):
+    async def list_models(self) -> list[str]:
+        data = await self._get(
+            f"{self.base_url}/v1beta/models?key={self.api_key or ''}",
+            headers={"Content-Type": "application/json"},
+        )
+        names = []
+        for row in data.get("models") or []:
+            if isinstance(row, dict) and row.get("name"):
+                names.append(str(row["name"]).removeprefix("models/").strip())
+        return [name for name in names if name]
+
     async def chat(self, messages: list[dict[str, str]], system: str | None = None) -> ChatResult:
         contents = [
             {"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
@@ -223,6 +286,14 @@ class GeminiProvider(BaseAIProvider):
 
 
 class OllamaProvider(BaseAIProvider):
+    async def list_models(self) -> list[str]:
+        data = await self._get(f"{self.base_url}/api/tags", headers={"Content-Type": "application/json"})
+        return [
+            str(row["name"]).strip()
+            for row in (data.get("models") or [])
+            if isinstance(row, dict) and row.get("name")
+        ]
+
     async def chat(self, messages: list[dict[str, str]], system: str | None = None) -> ChatResult:
         payload_messages: list[dict[str, str]] = []
         if system:

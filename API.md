@@ -53,7 +53,7 @@ QQ 官方机器人 Webhook 回调（免登录态，由 Ed25519 签名保护）�
 
 ## AI、GitHub、任务和插件
 
-- `/ai/presets`、`/ai/providers`、`/ai/models`、`/ai/chat`、`/ai/conversations`、`/ai/usage`：Provider/模型/会话/用量。
+- `/ai/presets`、`/ai/providers`、`/ai/models`、`/ai/chat`、`/ai/conversations`、`/ai/usage`：Provider/模型/会话/用量。`POST /ai/providers/{id}/sync-models` 拉取供应商模型列表（OpenAI 兼容 `/models`、Anthropic、Gemini、Ollama 各自适配）并把缺失的对话模型补进已配置列表——去重、过滤向量/TTS/语音等非对话模型、上限 100 个，不删除或修改已有模型；供应商保存后管理台会自动触发一次。
 - `/github/repos`、`/github/push-rules`、`/github/push-records`：仓库、规则、记录和重试；仓库 provider 当前支持 GitHub 与 Gitee。
 - `POST /webhook/github/{repo_id}`：GitHub Release Webhook。当前实现对所有环境统一要求 Secret；仓库未配置 Secret 时返回 **409**，配置 Secret 后必须校验 `X-Hub-Signature-256`，签名错误返回 **401**，通过后按 delivery/release 去重。开发/测试若需覆盖无密钥路径，应使用专门测试替身，不应放行真实端点。
 - `/tasks`、`/tasks/records`：任务定义、立即执行、切换和执行记录。

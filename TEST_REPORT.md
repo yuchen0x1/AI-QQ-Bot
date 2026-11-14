@@ -1,5 +1,15 @@
 # TEST_REPORT
 
+## v1.4.4 发布：2026-11-14（AI 供应商自动获取模型）
+
+| 状态 | 命令或范围 | 结果 |
+|---|---|---|
+| PASS | `pytest tests/test_ai.py`（新增 2 项） | sync-models 拉取 mock 供应商列表：embedding/tts 被过滤、导入 2 个对话模型、默认 enabled/优先级 100/非默认；重复拉取去重（created=0, existing=2）；不可达供应商返回 ok=False 并带「获取模型列表失败」原因 |
+| PASS | `pytest --tb=short -q`（backend 全量） | 228 项通过，0 失败（exit 0） |
+| PASS | `ruff check app tests migrations`、`npm run build`（frontend） | 通过（AIView 保存后自动拉取 + 「获取模型」按钮） |
+| PASS | `prepare_release.py --tag v1.4.4` | 三件套版本一致、canonical notes 就绪 |
+| （待补） | Release 工作流 / 生产验收 | 随 tag v1.4.4 触发，结果待回填 |
+
 ## v1.4.3 发布：2026-11-14（归档卡片崩溃修复 + 卡片默认开启）
 
 | 状态 | 命令或范围 | 结果 |
