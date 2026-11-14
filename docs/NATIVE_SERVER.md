@@ -66,7 +66,7 @@ sudo systemctl restart qbot
 - 升级状态与日志：`/var/lib/qbot-updater/jobs/`，root 专用目录。
 - 升级前数据库备份：`/var/lib/qbot-updater/backups/upgrade-<任务标识>.db`，由 root 独占，与应用数据及应用用户可写的日常备份目录分开保存。
 - 升级服务仅通过 `/run/qbot-updater/control.sock` 接收后台管理员发起的请求，没有公网管理端口；网页只能提供版本号与请求标识，不能提供下载地址、命令或路径。
-- 包只从 root 配置的 GitHub 仓库最新正式发布获取，并按 GitHub 的 SHA-256 digest 校验。依赖安装在独立用户的受限进程中完成，不向构建进程提供应用密钥。
+- 包只从 root 配置的 GitHub 仓库最新正式发布获取，并按 GitHub 的 SHA-256 digest 校验。服务器位于中国大陆时，可在该配置中增加 `download_mirrors`（下载镜像）与 `pip_index_url`（PyPI 镜像）加速，见 [在线更新与发布](AUTO_UPDATE.md#国内服务器加速)；镜像只作下载通道，SHA-256 校验与直连一致。依赖安装在独立用户的受限进程中完成，不向构建进程提供应用密钥。
 - 升级服务自身被中断时，下次启动会读取持久化状态；已经恢复对外写入的版本不会再自动覆盖数据库。如显示「需要检查」，先查看服务和升级日志再处理，保留备份。
 
 升级服务的 root 配置是 `/etc/qbot/updater.json`；不要将该文件或部署目录的写权限授予机器人用户。宿主机升级服务的代码更新由服务器管理员安装，网页升级不修改宿主机权限配置。

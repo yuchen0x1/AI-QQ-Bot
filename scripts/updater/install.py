@@ -82,6 +82,8 @@ def main():
         "service": "qbot.service",
         "app_user": "qbot",
         "build_user": "qbot-build",
+        "download_mirrors": [],
+        "pip_index_url": "",
     }
     destination = Path("/etc/qbot/updater.json")
     if destination.exists():

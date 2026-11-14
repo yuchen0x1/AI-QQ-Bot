@@ -2,11 +2,14 @@
 
 import asyncio
 from contextlib import closing
+import hashlib
 import io
+import json
 from pathlib import Path
 import runpy
 import sqlite3
 import tarfile
+import urllib.error
 from uuid import uuid4
 
 import httpx
@@ -90,6 +93,140 @@ def test_asset_and_redirect_allowlist_accept_only_pinned_sources():
         assert not allowed(url, {"github.com"})
 
 
+def test_updater_config_keeps_only_valid_mirrors(updater):
+    obj, *_ = updater
+    assert obj.mirrors == ["https://good.example"]
+
+
+def test_download_sources_prefer_valid_mirrors_then_direct_github():
+    asset = release()["assets"][0]
+    browser = "https://github.com/yuchen0x1/AI-QQ-Bot/releases/download/v2.0.0/qbot-ai-2.0.0-native.tar.gz"
+    sources = host["download_sources"](
+        asset,
+        "yuchen0x1/AI-QQ-Bot",
+        "2.0.0",
+        ["https://ghfast.top", "http://x.example", "https://u:p@y.example", "https://z.example:8443", "https://ok.example/prefix"],
+    )
+    assert sources == [f"https://ghfast.top/{browser}", None]
+
+
+def test_mirror_redirects_limited_to_mirror_and_github_hosts():
+    handler = host["GithubRedirects"](frozenset({"mirror.example"}))
+    request = host["Request"]("https://mirror.example/file")
+    assert handler.redirect_request(request, None, 302, "moved", {}, "https://mirror.example/next").full_url == "https://mirror.example/next"
+    assert handler.redirect_request(request, None, 302, "moved", {}, "https://release-assets.githubusercontent.com/f").full_url == "https://release-assets.githubusercontent.com/f"
+    for evil in ["http://mirror.example/next", "https://evil.example/file", "https://mirror.example:444/f"]:
+        with pytest.raises(ValueError):
+            handler.redirect_request(request, None, 302, "moved", {}, evil)
+
+
+class FakeResponse:
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+
+    def read(self, size):
+        return self._chunks.pop(0) if self._chunks else b""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class RecordingOpener:
+    def __init__(self, outcomes):
+        self.urls = []
+        self._outcomes = list(outcomes)
+
+    def open(self, request, timeout=35):
+        self.urls.append(request.full_url)
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return FakeResponse(outcome)
+
+
+def download_job():
+    return {"id": str(uuid4()), "version": "2.0.0", "status": "running", "phase": "downloading", "progress": 10}
+
+
+def sized_asset(content=b"hello"):
+    return {
+        "name": "qbot-ai-2.0.0-native.tar.gz",
+        "id": 123,
+        "size": len(content),
+        "digest": "sha256:" + hashlib.sha256(content).hexdigest(),
+    }
+
+
+MIRROR_URL = "https://mirror.example/https://github.com/yuchen0x1/AI-QQ-Bot/releases/download/v2.0.0/qbot-ai-2.0.0-native.tar.gz"
+DIRECT_URL = "https://api.github.com/repos/yuchen0x1/AI-QQ-Bot/releases/assets/123"
+LATEST_URL = "https://api.github.com/repos/yuchen0x1/AI-QQ-Bot/releases/latest"
+
+
+def test_download_falls_back_from_failed_mirror_to_direct(updater, monkeypatch):
+    obj, *_ = updater
+    mirror_opener = RecordingOpener([OSError("mirror down")])
+    direct_opener = RecordingOpener([[b"hel", b"lo"]])
+    monkeypatch.setattr(obj, "_mirror_opener", lambda host_name: mirror_opener)
+    monkeypatch.setattr(obj, "opener", direct_opener)
+    monkeypatch.setattr(obj, "mirrors", ["https://mirror.example"])
+    archive = Path(obj.config["state_dir"]) / "down.tar.gz"
+    obj.download(download_job(), sized_asset(), archive)
+    assert mirror_opener.urls == [MIRROR_URL]
+    assert direct_opener.urls == [DIRECT_URL]
+    assert archive.read_bytes() == b"hello"
+
+
+def test_download_switches_source_when_digest_mismatch(updater, monkeypatch):
+    obj, *_ = updater
+    mirror_opener = RecordingOpener([[b"XXXXX"]])
+    direct_opener = RecordingOpener([[b"hello"]])
+    monkeypatch.setattr(obj, "_mirror_opener", lambda host_name: mirror_opener)
+    monkeypatch.setattr(obj, "opener", direct_opener)
+    monkeypatch.setattr(obj, "mirrors", ["https://mirror.example"])
+    archive = Path(obj.config["state_dir"]) / "down2.tar.gz"
+    obj.download(download_job(), sized_asset(), archive)
+    assert mirror_opener.urls == [MIRROR_URL]
+    assert direct_opener.urls == [DIRECT_URL]
+    assert archive.read_bytes() == b"hello"
+
+
+def test_download_reports_failure_after_all_sources_exhausted(updater, monkeypatch):
+    obj, *_ = updater
+    mirror_opener = RecordingOpener([OSError("down1")])
+    direct_opener = RecordingOpener([OSError("down2")])
+    monkeypatch.setattr(obj, "_mirror_opener", lambda host_name: mirror_opener)
+    monkeypatch.setattr(obj, "opener", direct_opener)
+    monkeypatch.setattr(obj, "mirrors", ["https://mirror.example"])
+    archive = Path(obj.config["state_dir"]) / "down3.tar.gz"
+    with pytest.raises(OSError):
+        obj.download(download_job(), sized_asset(), archive)
+    assert mirror_opener.urls == [MIRROR_URL]
+    assert direct_opener.urls == [DIRECT_URL]
+    assert not archive.exists()
+
+
+def test_fetch_release_retries_transient_network_errors(updater, monkeypatch):
+    obj, *_ = updater
+    flaky = RecordingOpener([OSError("connection reset"), [json.dumps(release()).encode()]])
+    monkeypatch.setattr(obj, "opener", flaky)
+    monkeypatch.setattr(host["time"], "sleep", lambda seconds: None)
+    assert obj.fetch_release("2.0.0")["id"] == 123
+    assert flaky.urls == [LATEST_URL, LATEST_URL]
+
+
+def test_fetch_release_does_not_retry_definitive_http_errors(updater, monkeypatch):
+    obj, *_ = updater
+    flaky = RecordingOpener([urllib.error.HTTPError(DIRECT_URL.replace("/assets/123", "/releases/latest"), 404, "no", {}, io.BytesIO(b""))])
+    monkeypatch.setattr(obj, "opener", flaky)
+    monkeypatch.setattr(host["time"], "sleep", lambda seconds: None)
+    with pytest.raises(urllib.error.HTTPError):
+        obj.fetch_release("2.0.0")
+    assert len(flaky.urls) == 1
+
+
 @pytest.fixture
 def updater(tmp_path):
     root = tmp_path / "app"
@@ -111,6 +248,8 @@ def updater(tmp_path):
         "backup_dir": str(backups),
         "run_dir": str(run),
         "database": str(database),
+        "repository": "yuchen0x1/AI-QQ-Bot",
+        "download_mirrors": ["https://good.example", "http://bad.example", "https://u:p@bad2.example"],
     }
     obj = host["Updater"](cfg)
     return obj, old, database

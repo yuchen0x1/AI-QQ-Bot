@@ -24,6 +24,28 @@ UPDATE_CHECK_INTERVAL_MINUTES=360
 
 更新接口返回当前版本、最新版本、Release 地址、发布时间、更新日志、资产大小和 GitHub 提供的 SHA-256 digest（若资产存在）。下载地址只接受 HTTPS GitHub 资产地址。
 
+## 国内服务器加速
+
+服务器位于中国大陆时，GitHub 直连（尤其是 Release 资产下载）经常被限速或中断。原生升级服务支持在不降低安全要求的前提下走镜像加速，全部配置都在 root 独占的 `/etc/qbot/updater.json`（修改后执行 `sudo systemctl restart qbot-updater`）：
+
+```json
+{
+  "download_mirrors": ["https://ghfast.top", "https://gh-proxy.com"],
+  "pip_index_url": "https://pypi.tuna.tsinghua.edu.cn/simple"
+}
+```
+
+- `download_mirrors`：升级包下载源，按配置顺序逐个尝试，全部失败后仍回退 GitHub 直连（`api.github.com` 资产接口）。每个来源独立计时，单源 300 秒超时。
+- `pip_index_url`：安装依赖使用的 PyPI 镜像（如清华 TUNA、阿里云），留空则使用官方源。
+
+约束与安全边界：
+
+- 镜像地址格式为 gh-proxy 风格前缀，只接受 `https://主机名`（默认 443 端口、不带路径、不带凭据）；不符合的条目会被忽略并直接使用剩余来源。
+- 完整性不依赖镜像：版本元数据（含 SHA-256 digest）始终直连 `api.github.com` 获取（瞬时网络错误自动重试一次），镜像只作为下载通道；任何来源下载的升级包都必须通过 digest 校验，重定向只允许回到镜像主机或 GitHub。镜像出现 302 到第三方域名、内容被篡改等情形都会被判为失败并切换下一个来源。
+- 公共镜像属于第三方公益服务，可用性经常变化；只用于加速，不改变信任边界。长期生产环境建议自建镜像（例如用 Cloudflare Workers 部署 [gh-proxy](https://github.com/hunshcn/gh-proxy)）再填入 `download_mirrors`。
+- 请求镜像时不携带任何 GitHub Token 或应用凭据，泄露面仅限 URL 与 User-Agent。
+- 后端的版本检查与仓库动态轮询走 `GITHUB_API_BASE`（默认 `https://api.github.com`），可在 `qbot.env` 中指向自建的 GitHub API 反代；注意公共 gh-proxy 镜像通常只代理文件下载，不代理 API JSON。
+
 ## 发布新版本
 
 1. 在 `main` 上完成代码、测试和文档。

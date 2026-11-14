@@ -21,11 +21,18 @@ import subprocess
 import tarfile
 import threading
 import time
+import urllib.error
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
 ACTIVE = {"queued", "running"}
+GITHUB_HOSTS = {
+    "github.com",
+    "api.github.com",
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com",
+}
 MAX_ARCHIVE = 256 * 1024 * 1024
 MAX_UNPACKED = 1024 * 1024 * 1024
 PHASES = {
@@ -109,13 +116,40 @@ def allowed_url(url: str, hosts: set[str]) -> bool:
 
 
 class GithubRedirects(HTTPRedirectHandler):
+    def __init__(self, extra_hosts: frozenset[str] = frozenset()) -> None:
+        super().__init__()
+        self.extra_hosts = extra_hosts
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not allowed_url(
-            newurl,
-            {"github.com", "api.github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"},
-        ):
+        if not allowed_url(newurl, GITHUB_HOSTS | self.extra_hosts):
             raise ValueError("下载地址重定向到非 GitHub 服务")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def valid_mirror(mirror: str) -> str | None:
+    """Return a normalized gh-proxy style ``https://host`` prefix, or None when unusable."""
+    parsed = urlparse(mirror if isinstance(mirror, str) else "")
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.port not in (None, 443)
+        or parsed.path not in ("", "/")
+    ):
+        return None
+    return f"https://{parsed.hostname}"
+
+
+def download_sources(asset: dict, repository: str, version: str, mirrors: list[str]) -> list[str | None]:
+    """Mirror-prefixed download URLs in configured priority order; None means direct GitHub."""
+    browser = f"https://github.com/{repository}/releases/download/v{version}/{asset['name']}"
+    sources: list[str | None] = []
+    for mirror in mirrors or []:
+        if normalized := valid_mirror(mirror):
+            sources.append(f"{normalized}/{browser}")
+    sources.append(None)
+    return sources
 
 
 def release_asset(release: dict, repository: str, version: str) -> dict:
@@ -221,6 +255,7 @@ class Updater:
         self.gate = Path(config.get("gate_dir", config["run_dir"])) / "maintenance"
         self.lock = threading.RLock()
         self.opener = build_opener(GithubRedirects())
+        self.mirrors = [m for m in (config.get("download_mirrors") or []) if valid_mirror(m)]
 
     def current_job(self) -> dict | None:
         if not self.pointer.exists():
@@ -295,21 +330,60 @@ class Updater:
             f"https://api.github.com/repos/{repository}/releases/latest",
             headers={"User-Agent": "QBot-Native-Updater/1", "Accept": "application/vnd.github+json"},
         )
-        with self.opener.open(request, timeout=35) as response:
-            raw = response.read(2 * 1024 * 1024 + 1)
+        # api.github.com can stall from mainland networks; one retry covers transient resets.
+        last: Exception | None = None
+        raw = None
+        for attempt in range(2):
+            try:
+                with self.opener.open(request, timeout=35) as response:
+                    raw = response.read(2 * 1024 * 1024 + 1)
+                break
+            except urllib.error.HTTPError:
+                raise  # a definitive API answer; retrying cannot change it
+            except OSError as exc:  # URLError/timeouts/connection resets
+                last = exc
+                if attempt == 0:
+                    time.sleep(2)
+        if raw is None:
+            raise last
         if len(raw) > 2 * 1024 * 1024:
             raise ValueError("版本信息过大")
         return release_asset(json.loads(raw), repository, version)
 
     def download(self, job: dict, asset: dict, path: Path) -> None:
+        last: Exception | None = None
+        sources = download_sources(asset, self.config["repository"], job["version"], self.mirrors)
+        for source in sources:
+            try:
+                self._download_once(job, asset, path, source)
+                break
+            except Exception as exc:  # noqa: BLE001 — every failure is per-source; the next source may succeed
+                last = exc
+                path.unlink(missing_ok=True)
+        else:
+            raise last
+
+    def _mirror_opener(self, host_name: str):
+        """Mirrors may redirect within their own host; anything else is rejected like non-GitHub."""
+        return build_opener(GithubRedirects(frozenset({host_name})))
+
+    def _download_once(self, job: dict, asset: dict, path: Path, source: str | None) -> None:
+        if source:
+            request = Request(
+                source,
+                headers={"User-Agent": "QBot-Native-Updater/1", "Accept": "application/octet-stream"},
+            )
+            opener = self._mirror_opener(urlparse(source).hostname)
+        else:
+            request = Request(
+                f"https://api.github.com/repos/{self.config['repository']}/releases/assets/{asset['id']}",
+                headers={"User-Agent": "QBot-Native-Updater/1", "Accept": "application/octet-stream"},
+            )
+            opener = self.opener
         digest = hashlib.sha256()
         total = 0
         deadline = time.monotonic() + 300
-        request = Request(
-            f"https://api.github.com/repos/{self.config['repository']}/releases/assets/{asset['id']}",
-            headers={"User-Agent": "QBot-Native-Updater/1", "Accept": "application/octet-stream"},
-        )
-        with self.opener.open(request, timeout=35) as response, path.open("xb") as out:
+        with opener.open(request, timeout=35) as response, path.open("xb") as out:
             while chunk := response.read(256 * 1024):
                 total += len(chunk)
                 if total > asset["size"] or time.monotonic() > deadline:
@@ -366,6 +440,7 @@ class Updater:
             str(Path(__file__).with_name("build_environment.py")),
             str(folder),
             self.config["python"],
+            self.config.get("pip_index_url") or "",
         ]
         self.command(job, argv, timeout=630)
         # The transient unit has exited, including its children, before files become host-owned.
