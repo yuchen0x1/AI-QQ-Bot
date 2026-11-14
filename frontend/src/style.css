@@ -460,6 +460,15 @@ body {
 }
 .chart-surface {
   height: 290px;
+  /* 标题头占据固定高度后，图表画布必须占剩余空间：
+     否则 x-vue-echarts 的 height:100% 以整卡内容区为基准，画布底部
+     （含 X 轴日期标签）会溢出固定高度卡片被下方面板压住。 */
+  display: flex;
+  flex-direction: column;
+}
+.chart-surface x-vue-echarts {
+  flex: 1;
+  min-height: 0;
 }
 .surface-head {
   display: flex;
