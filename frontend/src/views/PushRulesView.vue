@@ -18,7 +18,7 @@ const config = reactive<any>({
     {key:'include_changelog',label:'附带更新日志',type:'switch',default:true},
     {key:'include_downloads',label:'附带下载地址',type:'switch',default:true},
     {key:'ai_summary',label:'启用 AI 摘要',type:'switch',default:true},
-    {key:'markdown_card',label:'Markdown 卡片',type:'switch',default:false},
+    {key:'markdown_card',label:'Markdown 卡片',type:'switch',default:true},
     {key:'enabled',label:'启用此规则',type:'switch',default:true},
     {key:'template',label:'消息模板（可选）',type:'textarea',placeholder:'支持 {repo_name}、{version}、{changelog}、{release_url}、{downloads} 等字段'}],
   editFields:[
