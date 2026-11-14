@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings as app_settings
 from app.models import Account, GithubRelease, GithubRepository, PushRecord, PushRule
 from app.services.ai import service as ai_service
+from app.services.github.card import send_push_record
 from app.services.logs import write_log
 from app.services.templates import NOISE_ASSET_PATTERN, render_template, strip_markdown, truncate
 
@@ -130,24 +131,36 @@ def _assets_covered(changelog: str, assets: list[dict[str, Any]]) -> bool:
     return all(name in changelog for name in main)
 
 
-async def build_message(
+async def render_release_message(
     db: AsyncSession, repo: GithubRepository, release: GithubRelease, rule: PushRule
-) -> str:
+) -> dict[str, Any]:
+    """渲染版本发布通知：返回纯文本 content 与 Markdown 卡片数据 card。
+
+    AI 摘要等副作用只发生一次，文本版与卡片版共享同一份摘要/日志/资产判断。
+    """
     summary = ""
     if rule.ai_summary:
         summary = await generate_summary(db, repo, release)
-    changelog = summary or strip_markdown(release.body or "") or "本次发布未提供更新日志。"
+    base_changelog = summary or strip_markdown(release.body or "") or "本次发布未提供更新日志。"
+    changelog = base_changelog
     if rule.include_changelog is False:
         changelog = "（已关闭更新日志推送）"
     downloads = format_assets(release.assets or [])
+    show_downloads = (
+        rule.include_downloads is not False
+        and downloads != "暂无附件"
+        and not _assets_covered(changelog, release.assets or [])
+    )
     if rule.include_downloads is False:
         values_assets = "（已关闭下载地址推送）"
-    elif downloads and not _assets_covered(changelog, release.assets or []):
+    elif show_downloads:
         # 正文没列出资产（或 AI 摘要丢掉了资产表）时才追加，默认模板不再自带该段。
         changelog = f"{changelog}\n\n下载与发布资产：\n{downloads}"
         values_assets = ""
     else:
         values_assets = ""
+    # 卡片数据：文本版把资产段追加进 changelog，卡片版用独立「下载与发布资产」段，
+    # 避免同一批内容在卡片里出现两次。
     # 模板优先级：规则自带 → 系统设置 push_default_template → 内置默认。
     # 之前系统设置这一层从未被读取，管理员改了也不生效。
     template = rule.template
@@ -156,12 +169,28 @@ async def build_message(
 
         template = await read_setting(db, "push_default_template", None) or DEFAULT_TEMPLATE
     values = build_values(repo, release, changelog=truncate(changelog, 1000), summary=summary)
+    card = {
+        "kind": "release",
+        "version": release.tag_name,
+        "prerelease": bool(release.prerelease),
+        "published_at": values["published_at"],
+        "changelog": base_changelog if rule.include_changelog is not False else None,
+        "downloads": downloads if show_downloads else None,
+        "url": release.html_url or repo.html_url,
+        "repo_url": repo.html_url,
+    }
     values["downloads"] = values_assets
     message = render_template(template, values)
     if rule.mention_user_ids:
         mentions = " ".join(f"[CQ:at,qq={uid}]" for uid in rule.mention_user_ids if uid)
         message = f"{mentions}\n{message}"
-    return truncate(message, 1800)
+    return {"content": truncate(message, 1800), "card": card}
+
+
+async def build_message(
+    db: AsyncSession, repo: GithubRepository, release: GithubRelease, rule: PushRule
+) -> str:
+    return (await render_release_message(db, repo, release, rule))["content"]
 
 
 async def dispatch_release(
@@ -187,8 +216,11 @@ async def dispatch_release(
         if existing:
             continue
         content = ""
+        card_data: dict[str, Any] | None = None
         try:
-            content = await build_message(db, repo, release, rule)
+            rendered = await render_release_message(db, repo, release, rule)
+            content = rendered["content"]
+            card_data = rendered["card"]
         except Exception as exc:  # noqa: BLE001
             logger.exception("渲染推送消息失败")
             content = f"【GitHub 项目更新通知】\n项目：{repo.full_name}\n版本：{release.tag_name}\n{release.html_url or ''}\n（消息渲染异常：{exc}）"
@@ -201,6 +233,7 @@ async def dispatch_release(
             account_id=rule.account_id,
             qq_group=rule.qq_group,
             content=content,
+            card_payload=card_data if rule.markdown_card else None,
             status="pending",
         )
         db.add(record)
@@ -223,7 +256,7 @@ async def dispatch_release(
             # another active adapter: cross-account delivery is a data-isolation violation.
             if not account_manager.is_online(rule.account_id):
                 raise RuntimeError("账号不在线，无法发送消息")
-            result = await account_manager.send_group_message(rule.account_id, rule.qq_group, content)
+            result = await send_push_record(db, record, rule, repo)
             data = result.get("data") or {}
             record.status = "success"
             record.message_id = data.get("message_id")
@@ -289,7 +322,7 @@ async def retry_failed_pushes(db: AsyncSession, limit: int = 20) -> dict[str, in
         await db.refresh(record)
         stats["attempted"] += 1
         try:
-            result = await account_manager.send_group_message(record.account_id, record.qq_group, record.content or "")
+            result = await send_push_record(db, record, rule, repo)
             data = result.get("data") or {}
             record.status = "success"
             record.message_id = data.get("message_id")
@@ -308,11 +341,16 @@ async def retry_failed_pushes(db: AsyncSession, limit: int = 20) -> dict[str, in
 
 async def resend_record(db: AsyncSession, record: PushRecord) -> PushRecord:
     """手动重新推送（不受去重限制，但会记录重试次数）。"""
-    from app.services.account_manager import account_manager
-
     record.retries += 1
+    rule = await db.get(PushRule, record.rule_id)
+    repo = await db.get(GithubRepository, record.repository_id)
     try:
-        result = await account_manager.send_group_message(record.account_id, record.qq_group, record.content or "")
+        if rule and repo:
+            result = await send_push_record(db, record, rule, repo)
+        else:
+            from app.services.account_manager import account_manager
+
+            result = await account_manager.send_group_message(record.account_id, record.qq_group, record.content or "")
         data = result.get("data") or {}
         record.status = "success"
         record.message_id = data.get("message_id")

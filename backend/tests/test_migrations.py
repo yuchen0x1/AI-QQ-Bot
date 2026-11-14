@@ -17,7 +17,7 @@ from app.db.migrations import SchemaVersionError
 from app.db.session import SessionLocal
 from app.models import Base, BotCommand, Plugin, Role, SystemSetting, User
 
-HEAD = "0011_official_only"
+HEAD = "0012_push_rule_markdown_card"
 
 
 @pytest.fixture

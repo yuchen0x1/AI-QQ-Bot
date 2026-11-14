@@ -114,6 +114,9 @@ class PushRule(Base, TimestampMixin):
     include_changelog: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     include_downloads: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     ai_summary: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 官方 Markdown 卡片（msg_type=2 + keyboard 按钮）：需机器人拥有 Markdown 权限，
+    # 未开通时发送层自动降级纯文本，不会中断推送。
+    markdown_card: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     mention_user_ids: Mapped[list[int]] = mapped_column(JSON, default=list, nullable=False)
     template: Mapped[str | None] = mapped_column(Text)
     event_types: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["release"], nullable=False)
@@ -145,6 +148,8 @@ class PushRecord(Base, TimestampMixin):
     account_id: Mapped[int] = mapped_column(Integer, nullable=False)
     qq_group: Mapped[int] = mapped_column(BigInteger, nullable=False)
     content: Mapped[str | None] = mapped_column(Text)
+    # Markdown 卡片数据（版本发布通知）：随记录持久化，重试/重发仍能发卡片。
+    card_payload: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)  # pending/success/failed
     error: Mapped[str | None] = mapped_column(Text)
     retries: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

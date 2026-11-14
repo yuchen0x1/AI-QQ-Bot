@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import GithubEvent, GithubRepository, PushRecord, PushRule
 from app.schemas.github import ACTIVITY_TYPES
+from app.services.github.card import send_push_record
 from app.services.templates import strip_markdown, truncate
 
 EVENT_LABELS = {
@@ -63,6 +64,30 @@ def normalize_activity(repo: GithubRepository, event_type: str, payload: dict[st
         if payload.get("deleted"):
             title = f"{actor} 删除 {branch}"
         url = payload.get("compare") or (f"{repo.html_url}/commit/{head}" if head and set(head) != {"0"} else repo.html_url)
+        # 卡片数据：webhook 的 commits 自带 added/modified/removed 文件清单；
+        # 轮询路径由 sync_activity 用 compare 接口补的 _compare（含行数统计）。
+        files: list[str] = []
+        for commit in commits[:20]:
+            for key in ("added", "modified", "removed"):
+                files.extend(str(f) for f in (commit.get(key) or []) if f)
+        compare = payload.get("_compare") if isinstance(payload.get("_compare"), dict) else None
+        stats: dict[str, Any] | None = None
+        if compare:
+            compare_files = [str(f) for f in (compare.get("files") or []) if f]
+            if compare_files:
+                files = compare_files
+            compare_stats = compare.get("stats") or {}
+            if compare_stats:
+                stats = {k: compare_stats.get(k) for k in ("additions", "deletions", "total")}
+        card = {
+            "kind": "push", "branch": branch, "author": actor, "head": head, "url": url,
+            "repo_url": repo.html_url, "commits": [
+                {"sha": str(c.get("id") or c.get("sha") or ""),
+                 "message": str(c.get("message") or "").splitlines()[0] if c.get("message") else ""}
+                for c in commits[:10]
+            ],
+            "commit_count": len(commits), "files": files[:20], "file_count": len(files), "stats": stats,
+        }
     elif event_type in {"create", "delete"}:
         identity = [payload.get("ref_type"), payload.get("ref"), payload.get("_event_id") or payload.get("_delivery_id")]
         title = f"{actor} {'创建' if event_type == 'create' else '删除'}{'标签' if payload.get('ref_type') == 'tag' else '分支'} {payload.get('ref') or ''}"
@@ -81,10 +106,16 @@ def normalize_activity(repo: GithubRepository, event_type: str, payload: dict[st
         identity = [entity.get("id") or number or actor, action, entity.get("updated_at"), subject, detail]
         if event_type in {"star", "public", "gollum", "member", "repository"}:
             identity.append(payload.get("_event_id") or payload.get("_delivery_id"))
+        card = {
+            "kind": "activity", "event_type": event_type, "label": EVENT_LABELS[event_type],
+            "title": title, "detail": truncate(detail, 600), "author": actor,
+            "url": url, "repo_url": repo.html_url,
+        }
     key_data = json.dumps([event_type, identity], sort_keys=True, ensure_ascii=False)
     key = f"activity:{repo.id}:" + hashlib.sha256(key_data.encode()).hexdigest()
     return {"dedupe_key": key, "event_type": event_type, "action": action, "title": truncate(title, 250),
-            "content": truncate(f"【GitHub · {EVENT_LABELS[event_type]}】\n项目：{repo.full_name}\n{title}\n{truncate(detail, 1000)}\n{url}", 1800)}
+            "content": truncate(f"【GitHub · {EVENT_LABELS[event_type]}】\n项目：{repo.full_name}\n{title}\n{truncate(detail, 1000)}\n{url}", 1800),
+            "card": card}
 
 
 async def ingest_activity(db: AsyncSession, repo: GithubRepository, event_type: str, payload: dict[str, Any], *, source: str) -> dict[str, Any]:
@@ -95,7 +126,7 @@ async def ingest_activity(db: AsyncSession, repo: GithubRepository, event_type: 
     is_new = event is None
     if event is None:
         event = GithubEvent(repository_id=repo.id, event_type=event_type, action=data["action"], dedupe_key=data["dedupe_key"], source=source,
-                            payload={"title": data["title"], "content": data["content"]})
+                            payload={"title": data["title"], "content": data["content"], "card": data.get("card")})
         db.add(event)
         try:
             await db.commit()
@@ -132,7 +163,7 @@ async def dispatch_activity(db: AsyncSession, repo: GithubRepository, event: Git
         try:
             if not account_manager.is_online(rule.account_id):
                 raise RuntimeError("账号不在线，等待重试")
-            result = await account_manager.send_group_message(rule.account_id, rule.qq_group, record.content or "")
+            result = await send_push_record(db, record, rule, repo)
             record.message_id = (result.get("data") or {}).get("message_id")
             record.status = "success"
             record.sent_at = datetime.now(timezone.utc)
@@ -181,6 +212,11 @@ async def sync_activity(db: AsyncSession, repo: GithubRepository, client, *, not
                 try:
                     compared = await client.compare_commits(repo.owner, repo.name, before, head)
                     payload["commits"] = [{"id": c.get("sha"), "message": (c.get("commit") or {}).get("message")} for c in compared.get("commits", [])[:8]]
+                    # compare 响应顺便带出行数统计与文件清单，供 Markdown 卡片的「统计信息」段使用。
+                    payload["_compare"] = {
+                        "stats": compared.get("stats") or {},
+                        "files": [str(f.get("filename") or "") for f in (compared.get("files") or []) if f.get("filename")],
+                    }
                 except Exception as exc:  # noqa: BLE001
                     # A force-push can remove the comparison base; still report the push.
                     if getattr(exc, "rate_limited", False):
