@@ -58,13 +58,13 @@ async def _set(client: httpx.AsyncClient, headers: dict, key: str, value) -> Non
 
 
 async def test_public_config_exposes_panel_title(client: httpx.AsyncClient, admin_headers: dict) -> None:
-    await _set(client, admin_headers, "panel_title", "冷漠管家控制台")
+    await _set(client, admin_headers, "panel_title", "示例机器人控制台")
 
     # 不带任何凭据也要能读到（登录页标题用）。
     response = await client.get("/api/system/config", headers={"Cookie": ""})
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["panel_title"] == "冷漠管家控制台"
+    assert body["panel_title"] == "示例机器人控制台"
     assert body["version"]
 
 

@@ -60,12 +60,12 @@ def notification_transport():
 
 
 async def configure(client, headers, account):
-    account_manager.adapter(account["id"]).groups[1016190748] = {"group_id": 1016190748, "group_name": "模拟通知群"}
+    account_manager.adapter(account["id"]).groups[123456789] = {"group_id": 123456789, "group_name": "模拟通知群"}
     await account_manager.sync_groups(account["id"])
     connected = await client.post("/api/github/oauth/token", headers=headers, json={"token": TOKEN})
     assert connected.status_code == 200, connected.text
     result = await client.put("/api/github/automation", headers=headers,
-                              json={"account_id": account["id"], "qq_group": 1016190748})
+                              json={"account_id": account["id"], "qq_group": 123456789})
     assert result.status_code == 200, result.text
 
 
@@ -107,7 +107,7 @@ async def test_discovers_all_pages_then_new_repositories_without_history_spam(cl
     assert (await read_config(db, user_id))["monitored_count"] == 3
     rules = list(await db.scalars(select(PushRule).where(PushRule.managed_by_user_id == user_id, PushRule.account_id == mock_account["id"])))
     assert len(rules) == 3
-    assert all("push" in r.event_types and r.qq_group == 1016190748 for r in rules)
+    assert all("push" in r.event_types and r.qq_group == 123456789 for r in rules)
 
 
 async def test_missing_repository_leaves_active_counts_and_can_return(client, admin_headers, db, mock_account, notification_transport):
@@ -224,7 +224,7 @@ async def test_disabling_subscription_stops_failed_deliveries(client, admin_head
     db.add(record)
     await db.commit()
     response = await client.put("/api/github/automation", headers=admin_headers,
-                                json={"account_id": mock_account["id"], "qq_group": 1016190748, "enabled": False})
+                                json={"account_id": mock_account["id"], "qq_group": 123456789, "enabled": False})
     assert response.status_code == 200
     await retry_failed_pushes(db)
     await db.refresh(record)
@@ -329,9 +329,9 @@ async def test_multiple_groups_receive_same_event_without_replacing_first(client
                                   'issue': {'id': 99001, 'number': 1, 'title': '多群投递测试'}}, source='webhook')
     assert result['pushed'] == 2
     messages = account_manager.adapter(mock_account['id']).outbox
-    assert {m['target'] for m in messages} == {1016190748, 900002}
+    assert {m['target'] for m in messages} == {123456789, 900002}
     state = (await client.get('/api/github/automation', headers=admin_headers)).json()
-    assert state['qq_group'] == 1016190748  # Legacy first-group fields remain stable.
+    assert state['qq_group'] == 123456789  # Legacy first-group fields remain stable.
     assert state['bound_target_count'] == 2
     rules = list(await db.scalars(select(PushRule).where(PushRule.account_id == mock_account['id'], PushRule.repository_id == repo.id)))
     assert {r.notification_target_id for r in rules if r.enabled} == {t['id'] for t in targets}
@@ -367,7 +367,7 @@ async def test_stop_or_remove_one_group_preserves_other_and_history(client, admi
     assert stopped.status_code == 200
     payload['issue']['id'] = 99003
     assert (await ingest_activity(db, repo, 'issues', payload, source='webhook'))['pushed'] == 1
-    assert account_manager.adapter(mock_account['id']).outbox[-1]['target'] == 1016190748
+    assert account_manager.adapter(mock_account['id']).outbox[-1]['target'] == 123456789
     removed = await client.delete(f"/api/github/automation/targets/{second['id']}", headers=admin_headers)
     assert removed.status_code == 200
     assert len(removed.json()['targets']) == 1
@@ -400,17 +400,17 @@ async def test_group_numbers_are_displayed_without_changing_routing(client, admi
     from app.models import Group, Message
 
     await configure(client, admin_headers, mock_account)
-    group = Group(account_id=mock_account['id'], group_number=123, name='群 123', display_number='1016190748')
+    group = Group(account_id=mock_account['id'], group_number=123, name='群 123', display_number='123456789')
     db.add(group)
     db.add(Message(account_id=mock_account['id'], qq_group=123, message_type='group', direction='out', content='号码显示测试'))
     await db.commit()
-    groups = (await client.get('/api/groups', headers=admin_headers, params={'account_id': mock_account['id'], 'keyword': '1016190748'})).json()['items']
+    groups = (await client.get('/api/groups', headers=admin_headers, params={'account_id': mock_account['id'], 'keyword': '123456789'})).json()['items']
     shown = next(g for g in groups if g['group_number'] == 123)
-    assert shown['display_number'] == '1016190748'
-    assert shown['display_name'] == 'QQ群 1016190748'
+    assert shown['display_number'] == '123456789'
+    assert shown['display_name'] == 'QQ群 123456789'
     messages = (await client.get('/api/messages', headers=admin_headers, params={'keyword': '号码显示测试'})).json()['items']
     assert messages[0]['qq_group'] == 123
-    assert messages[0]['group_display_number'] == '1016190748'
+    assert messages[0]['group_display_number'] == '123456789'
     repo = await db.scalar(select(GithubRepository).where(GithubRepository.full_name == 'notifier/project-one'))
     rule = PushRule(repository_id=repo.id, account_id=mock_account['id'], qq_group=123)
     db.add(rule)
@@ -420,5 +420,5 @@ async def test_group_numbers_are_displayed_without_changing_routing(client, admi
     record = PushRecord(repository_id=repo.id, rule_id=rule.id, event_id=event.id, account_id=mock_account['id'], qq_group=123, status='success')
     db.add(record)
     await db.commit()
-    filtered = (await client.get('/api/github/push-records', headers=admin_headers, params={'qq_group': 1016190748})).json()['items']
-    assert any(r['id'] == record.id and r['qq_group_display'] == '1016190748' for r in filtered)
+    filtered = (await client.get('/api/github/push-records', headers=admin_headers, params={'qq_group': 123456789})).json()['items']
+    assert any(r['id'] == record.id and r['qq_group_display'] == '123456789' for r in filtered)

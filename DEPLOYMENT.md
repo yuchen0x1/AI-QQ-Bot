@@ -49,7 +49,7 @@ docker compose exec backend alembic upgrade head
 
 ## GitHub OAuth（可选）
 
-1. GitHub → Settings → Developer settings → OAuth Apps → New OAuth App；`Homepage URL` 填站点地址，`Authorization callback URL` 必须是 `${PUBLIC_BASE_URL}/api/github/oauth/callback`（例如 `https://xiaoshuo.lenmo.top/api/github/oauth/callback`）。
+1. GitHub → Settings → Developer settings → OAuth Apps → New OAuth App；`Homepage URL` 填站点地址，`Authorization callback URL` 必须是 `${PUBLIC_BASE_URL}/api/github/oauth/callback`（例如 `https://your-domain.example/api/github/oauth/callback`）。
 2. 两种配置方式：后台「GitHub 仓库监控 → 配置 OAuth App」填写（存在 `system_settings.github_oauth`，Client Secret 加密，改完立即生效）；或在 `.env` 设置 `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` 后重启 backend。
 3. 反向代理必须原样透传 `Host` 与 `X-Forwarded-*`，否则回调地址与前端跳转会不一致；本地开发（前端 5173 代理 `/api`）需额外设置 `GITHUB_OAUTH_REDIRECT_URI=http://127.0.0.1:5173/api/github/oauth/callback`。
 4. 授权范围默认 `read:user repo`；只监控公开仓库可改为 `read:user public_repo`（OAuth App 没有只读的 `repo` 权限）。
@@ -77,6 +77,6 @@ docker compose exec backend alembic upgrade head
 
 ## GitHub 全部仓库通知部署
 
-可用 `python3 scripts/prepare_server.py --public-url https://你的域名` 生成新的强密码配置（拒绝覆盖已有 `.env`）。源码打包、Token 权限、通知群 1016190748 绑定、实时 Webhook、迁移限制见 [全部仓库通知指南](docs/GITHUB_NOTIFICATIONS.md)。
+可用 `python3 scripts/prepare_server.py --public-url https://你的域名` 生成新的强密码配置（拒绝覆盖已有 `.env`）。源码打包、Token 权限、通知群绑定、实时 Webhook、迁移限制见 [全部仓库通知指南](docs/GITHUB_NOTIFICATIONS.md)。
 
 QQ 接入仅支持官方机器人。升级迁移 `0011_official_only` 会停用旧数据库中的其他接入及其相关通知/任务，保留历史；升级前仍需备份。

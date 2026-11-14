@@ -252,7 +252,7 @@ ACTIVITY_TYPES = ["push", "release", "issues", "pull_request", "issue_comment", 
 class GithubAutomationIn(BaseModel):
     enabled: bool = True
     account_id: int | None = Field(default=None, gt=0)
-    group_label: str = Field(default="1016190748", min_length=1, max_length=80)
+    group_label: str = Field(default="123456789", min_length=1, max_length=80)
     qq_group: int | None = Field(default=None, gt=0)
     poll_interval_seconds: int = Field(default=300, ge=60, le=86400)
     event_types: list[str] = Field(default_factory=lambda: list(ACTIVITY_TYPES))
