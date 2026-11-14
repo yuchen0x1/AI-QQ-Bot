@@ -9,7 +9,7 @@
 | PASS | `pytest --tb=short -q`（backend 全量） | 224 项通过，0 失败（exit 0） |
 | PASS | `ruff check app tests migrations ../scripts/updater` | 通过 |
 | PASS | `prepare_release.py --tag v1.4.2` | 三件套版本一致、canonical notes 就绪 |
-| （待补） | Release 工作流 / 生产验收 | 随 tag v1.4.2 触发，结果待回填 |
+| PASS | Release 工作流（run 43606175286，2m17s）+ main CI（run 43606168846） | v1.4.2 已发布：`qbot-ai-1.4.2-native.tar.gz` / tar.gz / zip / SHA256SUMS 全部上传；生产升级与归档移除真实验证待后台「立即升级」后回填 |
 
 ## v1.4.1 发布：2026-11-14（升级服务国内镜像加速）
 
