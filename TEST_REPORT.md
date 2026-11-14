@@ -9,7 +9,7 @@
 | PASS | `pytest --tb=short -q`（backend 全量） | 231 项通过，0 失败（exit 0） |
 | PASS | `ruff check app tests migrations` | 通过 |
 | PASS | `prepare_release.py --tag v1.4.7` | 三件套版本一致、canonical notes 就绪 |
-| （待补） | Release 工作流 / 生产验收 | 随 tag v1.4.7 触发，结果待回填 |
+| PASS | Release 工作流（v1.4.7） | `qbot-ai-1.4.7-native.tar.gz` / tar.gz / zip / SHA256SUMS 全部上传；生产验收随后台升级进行 |
 
 ## v1.4.6 发布：2026-11-15（日志保留可配置，默认 3 天） 发布：2026-11-15（日志保留可配置，默认 3 天）
 
