@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QBot AI — 多账号智能 QQ 机器人管理平台</title>
+<meta name="description" content="QBot AI 是一个开源的多账号智能 QQ 机器人管理平台：QQ 开放平台官方机器人接入、AI 多供应商、GitHub 仓库群通知、持久化定时任务与插件扩展，Docker Compose 一键部署。">
+<meta property="og:title" content="QBot AI — 多账号智能 QQ 机器人管理平台">
+<meta property="og:description" content="官方机器人接入 · 多账号隔离 · AI 多供应商 · GitHub 仓库群通知 · Docker 一键部署 · MIT 开源">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://qbot-ai.edgeone.dev/">
+<link rel="canonical" href="https://qbot-ai.edgeone.dev/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect x='14' y='24' width='72' height='56' rx='16' fill='%2338bdf8'/%3E%3Crect x='40' y='8' width='20' height='18' rx='6' fill='%23818cf8'/%3E%3Ccircle cx='38' cy='50' r='7' fill='%230a0f1e'/%3E%3Ccircle cx='62' cy='50' r='7' fill='%230a0f1e'/%3E%3Crect x='40' y='64' width='20' height='6' rx='3' fill='%230a0f1e'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0a0f1e;
+    --bg-soft: #0e1528;
+    --card: rgba(255, 255, 255, 0.04);
+    --card-border: rgba(255, 255, 255, 0.09);
+    --text: #e6ebf5;
+    --text-dim: #93a0b8;
+    --accent: #38bdf8;
+    --accent2: #818cf8;
+    --qq-blue: #12b7f5;
+    --ok: #34d399;
+    --radius: 16px;
+    --mono: ui-monospace, "Cascadia Code", Consolas, "JetBrains Mono", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+  /* 背景装饰 */
+  .bg-decor {
+    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(900px 500px at 15% -10%, rgba(56, 189, 248, 0.14), transparent 60%),
+      radial-gradient(800px 500px at 85% 10%, rgba(129, 140, 248, 0.12), transparent 60%),
+      radial-gradient(700px 600px at 50% 110%, rgba(18, 183, 245, 0.08), transparent 60%);
+  }
+  .bg-grid {
+    position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: 0.35;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%);
+    -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%);
+  }
+  .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  /* 导航 */
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(10, 15, 30, 0.72);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 62px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; text-decoration: none; color: var(--text); }
+  .brand svg { width: 30px; height: 30px; }
+  .brand .beta { font-size: 11px; font-weight: 600; color: var(--accent); border: 1px solid rgba(56,189,248,.4); border-radius: 99px; padding: 1px 8px; background: rgba(56,189,248,.08); }
+  .nav-links { display: flex; align-items: center; gap: 22px; }
+  .nav-links a { color: var(--text-dim); text-decoration: none; font-size: 14.5px; transition: color .2s; }
+  .nav-links a:hover { color: var(--text); }
+  .nav-links a.btn-nav {
+    color: #0a0f1e; background: linear-gradient(135deg, var(--accent), var(--accent2));
+    padding: 7px 16px; border-radius: 10px; font-weight: 600;
+  }
+  .nav-links a.btn-nav:hover { color: #0a0f1e; opacity: .9; }
+  @media (max-width: 640px) { .nav-links a:not(.btn-nav) { display: none; } }
+
+  /* Hero */
+  .hero { padding: 88px 0 64px; text-align: center; }
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--text-dim);
+    border: 1px solid var(--card-border); border-radius: 99px;
+    padding: 6px 16px; background: var(--card); margin-bottom: 26px;
+  }
+  .hero-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .hero h1 { font-size: clamp(34px, 6vw, 56px); line-height: 1.25; font-weight: 800; letter-spacing: 0.5px; }
+  .hero h1 .grad {
+    background: linear-gradient(120deg, var(--accent) 10%, var(--accent2) 60%, var(--qq-blue) 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero p.sub { max-width: 660px; margin: 20px auto 0; color: var(--text-dim); font-size: clamp(15px, 2.4vw, 18px); }
+  .hero-cta { margin-top: 36px; display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 13px 26px; border-radius: 12px; font-size: 15.5px; font-weight: 600;
+    text-decoration: none; transition: transform .15s, opacity .2s, box-shadow .2s;
+  }
+  .btn:hover { transform: translateY(-2px); }
+  .btn-primary {
+    color: #08101f;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    box-shadow: 0 8px 30px rgba(56, 189, 248, 0.35);
+  }
+  .btn-ghost { color: var(--text); border: 1px solid var(--card-border); background: var(--card); }
+  .btn svg { width: 18px; height: 18px; }
+
+  /* 终端窗口 */
+  .terminal-wrap { max-width: 760px; margin: 52px auto 0; }
+  .terminal {
+    background: #0d1322; border: 1px solid var(--card-border); border-radius: 14px;
+    text-align: left; overflow: hidden; box-shadow: 0 24px 70px rgba(2, 6, 18, 0.6);
+  }
+  .terminal-bar {
+    display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+    background: rgba(255,255,255,0.04); border-bottom: 1px solid var(--card-border);
+  }
+  .terminal-bar .t-dot { width: 12px; height: 12px; border-radius: 50%; }
+  .terminal-bar .t-title { margin-left: 10px; font-size: 12.5px; color: var(--text-dim); font-family: var(--mono); }
+  .terminal-body { padding: 18px 20px; font-family: var(--mono); font-size: 13.5px; line-height: 1.9; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+  .terminal-body .p { color: var(--accent); }
+  .terminal-body .c { color: #5b6b8c; }
+  .terminal-body .cmd { color: var(--text); }
+  .terminal-body .ok { color: var(--ok); }
+  .terminal-body .hl { color: var(--accent2); }
+  .copy-btn {
+    margin-left: auto; font-size: 12px; color: var(--text-dim); cursor: pointer;
+    border: 1px solid var(--card-border); border-radius: 7px; padding: 3px 10px;
+    background: transparent; font-family: inherit; transition: color .2s, border-color .2s;
+  }
+  .copy-btn:hover { color: var(--accent); border-color: rgba(56,189,248,.5); }
+
+  /* 通用 section */
+  section { padding: 72px 0; }
+  .sec-head { text-align: center; margin-bottom: 48px; }
+  .sec-head h2 { font-size: clamp(26px, 4vw, 36px); font-weight: 800; }
+  .sec-head h2 .grad {
+    background: linear-gradient(120deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sec-head p { color: var(--text-dim); margin-top: 12px; max-width: 620px; margin-left: auto; margin-right: auto; font-size: 15.5px; }
+
+  /* 统计条 */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; max-width: 880px; margin: 0 auto; }
+  .stat { text-align: center; padding: 22px 10px; background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); }
+  .stat b { display: block; font-size: 26px; font-weight: 800; background: linear-gradient(120deg, var(--accent), var(--accent2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat span { font-size: 13px; color: var(--text-dim); }
+  @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+
+  /* 功能卡片 */
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 18px; }
+  .feature {
+    background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius);
+    padding: 26px 24px; transition: transform .25s, border-color .25s, background .25s;
+  }
+  .feature:hover { transform: translateY(-4px); border-color: rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.05); }
+  .feature .icon {
+    width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, rgba(56,189,248,.16), rgba(129,140,248,.16));
+    border: 1px solid rgba(56,189,248,.25); margin-bottom: 16px;
+  }
+  .feature .icon svg { width: 22px; height: 22px; stroke: var(--accent); }
+  .feature h3 { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
+  .feature p { font-size: 14px; color: var(--text-dim); }
+
+  /* 接入方式 */
+  .access { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .access-card { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 30px 28px; }
+  .access-card .tag { display: inline-block; font-size: 12px; font-weight: 600; color: var(--accent); background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.35); border-radius: 99px; padding: 3px 12px; margin-bottom: 14px; }
+  .access-card h3 { font-size: 19px; margin-bottom: 10px; }
+  .access-card p { font-size: 14.5px; color: var(--text-dim); margin-bottom: 14px; }
+  .access-card code { font-family: var(--mono); font-size: 12.5px; color: #9fd6fb; background: rgba(56,189,248,.08); border-radius: 6px; padding: 2px 7px; word-break: break-all; }
+  .access-card ul { list-style: none; margin-top: 6px; }
+  .access-card li { font-size: 14px; color: var(--text-dim); padding: 5px 0 5px 24px; position: relative; }
+  .access-card li::before { content: "✓"; position: absolute; left: 2px; color: var(--ok); font-weight: 700; }
+  @media (max-width: 760px) { .access { grid-template-columns: 1fr; } }
+
+  /* 部署步骤 */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 34px; }
+  .step { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 26px 24px; position: relative; }
+  .step .num {
+    width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 16px; color: #08101f;
+    background: linear-gradient(135deg, var(--accent), var(--accent2)); margin-bottom: 14px;
+  }
+  .step h3 { font-size: 16.5px; margin-bottom: 8px; }
+  .step p { font-size: 14px; color: var(--text-dim); }
+  .step code { font-family: var(--mono); font-size: 12.5px; color: #9fd6fb; background: rgba(56,189,248,.08); border-radius: 6px; padding: 1px 6px; }
+  @media (max-width: 760px) { .steps { grid-template-columns: 1fr; } }
+  .code-block {
+    background: #0d1322; border: 1px solid var(--card-border); border-radius: 14px;
+    font-family: var(--mono); font-size: 13.5px; padding: 20px 22px; line-height: 2; white-space: pre-wrap; word-break: break-all;
+    overflow-x: auto; box-shadow: 0 16px 50px rgba(2,6,18,.5);
+  }
+  .code-block .p { color: var(--accent); }
+  .code-block .c { color: #5b6b8c; }
+  .code-block .cmd { color: var(--text); }
+  .code-block .ok { color: var(--ok); }
+  .deploy-note { text-align: center; color: var(--text-dim); font-size: 13.5px; margin-top: 18px; }
+  .deploy-note a { color: var(--accent); text-decoration: none; }
+  .deploy-note a:hover { text-decoration: underline; }
+
+  /* 安全区 */
+  .security-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .sec-item { display: flex; align-items: center; gap: 12px; background: var(--card); border: 1px solid var(--card-border); border-radius: 12px; padding: 16px 18px; font-size: 14.5px; }
+  .sec-item svg { width: 18px; height: 18px; stroke: var(--ok); flex-shrink: 0; }
+
+  /* 技术栈 */
+  .stack { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .chip {
+    font-size: 13px; font-weight: 600; color: var(--text-dim);
+    border: 1px solid var(--card-border); background: var(--card);
+    border-radius: 99px; padding: 7px 18px; transition: color .2s, border-color .2s;
+  }
+  .chip:hover { color: var(--accent); border-color: rgba(56,189,248,.45); }
+
+  /* CTA 区 */
+  .final-cta {
+    text-align: center; padding: 60px 28px;
+    background: linear-gradient(160deg, rgba(56,189,248,.09), rgba(129,140,248,.09));
+    border: 1px solid rgba(56,189,248,.25); border-radius: 20px;
+  }
+  .final-cta h2 { font-size: clamp(24px, 4vw, 34px); font-weight: 800; margin-bottom: 12px; }
+  .final-cta p { color: var(--text-dim); margin-bottom: 30px; }
+
+  footer { border-top: 1px solid rgba(255,255,255,.07); padding: 40px 0 44px; margin-top: 40px; }
+  .foot-inner { display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+  .foot-links { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; }
+  .foot-links a { color: var(--text-dim); text-decoration: none; font-size: 14px; }
+  .foot-links a:hover { color: var(--accent); }
+  .foot-note { font-size: 12.5px; color: #677592; max-width: 640px; }
+
+  /* 滚动浮现 */
+  .reveal { opacity: 0; transform: translateY(26px); transition: opacity .7s ease, transform .7s ease; }
+  .reveal.visible { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="bg-decor"></div>
+<div class="bg-grid"></div>
+
+<nav>
+  <div class="container nav-inner">
+    <a class="brand" href="#top">
+      <svg viewBox="0 0 100 100" fill="none">
+        <rect x="14" y="24" width="72" height="56" rx="16" fill="#38bdf8"/>
+        <rect x="40" y="8" width="20" height="18" rx="6" fill="#818cf8"/>
+        <circle cx="38" cy="50" r="7" fill="#0a0f1e"/>
+        <circle cx="62" cy="50" r="7" fill="#0a0f1e"/>
+        <rect x="40" y="64" width="20" height="6" rx="3" fill="#0a0f1e"/>
+      </svg>
+      QBot AI <span class="beta">开源</span>
+    </a>
+    <div class="nav-links">
+      <a href="#features">功能特性</a>
+      <a href="#access">接入方式</a>
+      <a href="#deploy">快速部署</a>
+      <a class="btn-nav" href="https://github.com/yuchen0x1/AI-QQ-Bot" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero container" id="top">
+  <div class="hero-badge"><span class="dot"></span>开源 · MIT 协议 · 基于 QQ 开放平台官方机器人</div>
+  <h1>多账号智能 <span class="grad">QQ 机器人</span><br>管理平台</h1>
+  <p class="sub">
+    面向 Linux 服务器的模块化机器人控制台：官方机器人接入、AI 多供应商调度、
+    GitHub 仓库动态群通知、持久化定时任务与插件扩展，Docker Compose 一键部署。
+  </p>
+  <div class="hero-cta">
+    <a class="btn btn-primary" href="#deploy">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      快速开始
+    </a>
+    <a class="btn btn-ghost" href="https://github.com/yuchen0x1/AI-QQ-Bot/releases" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      下载最新版本
+    </a>
+    <a class="btn btn-ghost" href="https://github.com/yuchen0x1/AI-QQ-Bot" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17 4.7 18 5 18 5c.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.1 0 4.7-2.8 5.7-5.5 6 .4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
+      查看源码
+    </a>
+  </div>
+
+  <div class="terminal-wrap reveal">
+    <div class="terminal">
+      <div class="terminal-bar">
+        <span class="t-dot" style="background:#ff5f57"></span>
+        <span class="t-dot" style="background:#febc2e"></span>
+        <span class="t-dot" style="background:#28c840"></span>
+        <span class="t-title">deploy — bash</span>
+        <button class="copy-btn" id="copyDeploy">复制</button>
+      </div>
+      <div class="terminal-body" id="deployScript">
+<span class="p">$</span> <span class="cmd">git clone https://github.com/yuchen0x1/AI-QQ-Bot.git</span>
+<span class="p">$</span> <span class="cmd">cd AI-QQ-Bot && cp .env.example .env</span>
+<span class="p">$</span> <span class="c">python3 -c 'import secrets; print(secrets.token_urlsafe(48))'</span> <span class="c"># 填入 .env 的 SECRET_KEY</span>
+<span class="p">$</span> <span class="cmd">docker compose up -d --build</span>
+<span class="ok">✔ frontend   Started</span>
+<span class="ok">✔ backend    Started</span>
+<span class="ok">✔ postgres   Started</span>
+<span class="ok">✔ redis      Started</span>
+<span class="ok">✔ nginx      Started</span>
+<span class="p">→</span> <span class="hl">控制台: http://127.0.0.1:8080</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- 数据条 -->
+<section class="container reveal" style="padding-top: 8px;">
+  <div class="stats">
+    <div class="stat"><b>多账号</b><span>官方机器人隔离运行</span></div>
+    <div class="stat"><b>2 种接入</b><span>WebSocket / 验签 Webhook</span></div>
+    <div class="stat"><b>13+ 模块</b><span>一体化 Web 管理控制台</span></div>
+    <div class="stat"><b>MIT</b><span>完全开源，可自托管</span></div>
+  </div>
+</section>
+
+<!-- 功能特性 -->
+<section class="container" id="features">
+  <div class="sec-head reveal">
+    <h2>为什么选择 <span class="grad">QBot AI</span></h2>
+    <p>从机器人接入到运维安全，一个平台覆盖 QQ 机器人运营的全部环节。</p>
+  </div>
+  <div class="features">
+    <div class="feature reveal">
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg></div>
+      <h3>官方机器人接入</h3>
+      <p>基于 QQ 开放平台官方机器人：AppID + AppSecret 凭据接入，Gateway WebSocket 长连接或 Ed25519 验签 Webhook，自动重连与 Resume 会话恢复。</p>
+    </div>
+    <div class="feature reveal">
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="8" height="16" rx="2"/><rect x="14" y="4" width="8" height="16" rx="2"/><line x1="10" y1="12" x2="14" y2="12" stroke-dasharray="2 2"/></svg></div>
+      <h3>多账号隔离</h3>
+      <p>多个官方机器人账号同时在线、互不干扰；插件、群聊、任务与推送按账号独立绑定，OpenID 自动映射为稳定内部 ID。</p>
+    </div>
+    <div class="feature reveal">
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v2a3 3 0 0 1-3 3h-1v3a4 4 0 0 1-8 0v-3H7a3 3 0 0 1-3-3v-2a3 3 0 0 1 3-3h1V6a4 4 0 0 1 4-4z"/><circle cx="9" cy="11" r="1"/><circle cx="15" cy="11" r="1"/></svg></div>
+      <h3>AI 多供应商</h3>
+      <p>OpenAI 兼容 Provider、多模型管理、会话上下文与失败自动降级；API Key 加密存储、界面脱敏，群聊 @ 机器人即可触发 AI 回复与总结。</p>
+    </div>
+    <div class="feature reveal">
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg></div>
+      <h3>GitHub 仓库群通知</h3>
+      <p>Token 一次连接、自动发现新仓库；提交、PR、Issue、Release 等事件实时推送到多个群，支持 AI 更新摘要、事件去重与失败重试。</p>
+    </div>
+    <div class="feature reveal">
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg></div>
+      <h3>失败邮件提醒</h3>
+      <p>Agent Mail / SMTP 发信账号可视化配置，推送失败、任务异常自动邮件告警；发信队列持久化、自动重试，附带发信测试。</p>
+    </div>
+    <div class="feature reveal">
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+      <h3>定时任务与插件</h3>
+      <p>APScheduler 持久化定时群消息与执行记录；插件目录自动扫描，按账号 / 群灵活绑定，定时推送与群聊总结开箱即用。</p>
+    </div>
+    <div class="feature reveal">
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div>
+      <h3>一体化控制台</h3>
+      <p>Vue 3 + Element Plus 管理后台：仪表盘、账号、群聊、审核、AI、仓库、推送规则、任务、插件、日志、监控、系统设置一应俱全。</p>
+    </div>
+    <div class="feature reveal">
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></div>
+      <h3>在线一键升级</h3>
+      <p>后台「立即升级」：服务器自动下载、SHA-256 校验、备份、安装并重启，网页实时显示进度；失败自动回滚到原版本。</p>
+    </div>
+    <div class="feature reveal">
+      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg></div>
+      <h3>安全内建</h3>
+      <p>JWT 登录、RBAC 权限、TOTP 两步验证、登录失败锁定、会话设备管理、敏感配置加密、操作审计与请求限流，默认只监听回环地址。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 接入方式 -->
+<section class="container" id="access">
+  <div class="sec-head reveal">
+    <h2>两种官方接入方式，<span class="grad">按需选择</span></h2>
+    <p>均基于 QQ 开放平台官方机器人凭据，无需扫码登录、无需逆向协议。</p>
+  </div>
+  <div class="access">
+    <div class="access-card reveal">
+      <span class="tag">推荐 · 无需公网回调</span>
+      <h3>WebSocket 长连接</h3>
+      <p>平台主动连接 QQ 官方 Gateway，服务器无需暴露公网回调地址。</p>
+      <ul>
+        <li>Identify / Heartbeat / Resume 全流程实现</li>
+        <li>断线自动退避重连、会话恢复</li>
+        <li>本地调试无需公网 IP 与域名</li>
+        <li>适合家宽 / 内网环境部署</li>
+      </ul>
+    </div>
+    <div class="access-card reveal">
+      <span class="tag">无需出站长连接</span>
+      <h3>Webhook 验签回调</h3>
+      <p>平台把事件推送到你的 HTTPS 回调地址，本地自动应答 <code>op=13</code> 验证并验签每一笔推送。</p>
+      <ul>
+        <li>AppSecret 派生 Ed25519 密钥，与官方 DEMO 逐字节对齐</li>
+        <li>回调地址形如 <code>https://your-domain.example/api/qqbot/webhook/{AppID}</code></li>
+        <li>时间窗验签防重放，多实例部署天然亲和</li>
+        <li>签名失败原因记录到账号日志，方便排障</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 快速部署 -->
+<section class="container" id="deploy">
+  <div class="sec-head reveal">
+    <h2>三步<span class="grad">部署到你的服务器</span></h2>
+    <p>需要一台 Linux 服务器与 Docker Compose v2；后续升级可直接在后台一键完成。</p>
+  </div>
+  <div class="steps">
+    <div class="step reveal">
+      <div class="num">1</div>
+      <h3>克隆仓库并配置</h3>
+      <p>复制 <code>.env.example</code> 为 <code>.env</code>，填入随机生成的 <code>SECRET_KEY</code> 与数据库、Redis 强密码。</p>
+    </div>
+    <div class="step reveal">
+      <div class="num">2</div>
+      <h3>启动整套服务</h3>
+      <p><code>docker compose up -d --build</code> 一键拉起 frontend、backend、postgres、redis、nginx 五个容器。</p>
+    </div>
+    <div class="step reveal">
+      <div class="num">3</div>
+      <h3>接入官方机器人</h3>
+      <p>QQ 开放平台创建机器人，取得 AppID / AppSecret 填入后台「账号管理」，测试连接后启动即可。</p>
+    </div>
+  </div>
+  <div class="code-block reveal">
+<span class="p">$</span> <span class="cmd">cp .env.example .env</span>
+<span class="p">$</span> <span class="cmd">python3 -c 'import secrets; print(secrets.token_urlsafe(48))'</span>
+<span class="c"># 用生成的值填写 SECRET_KEY，并替换 POSTGRES_PASSWORD、REDIS_PASSWORD、ADMIN_PASSWORD</span>
+<span class="p">$</span> <span class="cmd">docker compose up -d --build</span>
+<span class="p">$</span> <span class="cmd">docker compose logs -f backend</span>
+<span class="ok">✔ 页面默认 http://127.0.0.1:8080，建议由 HTTPS 反向代理接入</span>
+  </div>
+  <p class="deploy-note reveal">
+    详细的部署文档、机器人接入步骤与排障指南见
+    <a href="https://github.com/yuchen0x1/AI-QQ-Bot/blob/main/README.md" target="_blank" rel="noopener">项目 README</a>
+    · <a href="https://github.com/yuchen0x1/AI-QQ-Bot/blob/main/docs/AUTO_UPDATE.md" target="_blank" rel="noopener">在线更新说明</a>
+  </p>
+</section>
+
+<!-- 安全 -->
+<section class="container">
+  <div class="sec-head reveal">
+    <h2>安全，<span class="grad">从第一行代码开始</span></h2>
+    <p>面向公网环境设计的安全基线，不是事后补丁。</p>
+  </div>
+  <div class="security-grid">
+    <div class="sec-item reveal"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>JWT 登录 + RBAC 权限</div>
+    <div class="sec-item reveal"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>TOTP 两步验证（二维码绑定）</div>
+    <div class="sec-item reveal"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>登录失败锁定 + 会话设备管理</div>
+    <div class="sec-item reveal"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>AppSecret 加密存储、不回显</div>
+    <div class="sec-item reveal"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>操作审计 + 请求限流</div>
+    <div class="sec-item reveal"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>数据库备份脚本 + 恢复演练指引</div>
+  </div>
+</section>
+
+<!-- 技术栈 -->
+<section class="container reveal">
+  <div class="sec-head">
+    <h2>现代技术栈</h2>
+  </div>
+  <div class="stack">
+    <span class="chip">Python 3.12</span>
+    <span class="chip">FastAPI</span>
+    <span class="chip">SQLAlchemy 2 Async</span>
+    <span class="chip">PostgreSQL</span>
+    <span class="chip">Redis</span>
+    <span class="chip">Alembic</span>
+    <span class="chip">APScheduler</span>
+    <span class="chip">Vue 3</span>
+    <span class="chip">TypeScript</span>
+    <span class="chip">Element Plus</span>
+    <span class="chip">Vite</span>
+    <span class="chip">Docker Compose</span>
+    <span class="chip">Nginx</span>
+    <span class="chip">Pytest</span>
+  </div>
+</section>
+
+<!-- 底部 CTA -->
+<section class="container">
+  <div class="final-cta reveal">
+    <h2>现在，把机器人交给<span style="background:linear-gradient(120deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent"> QBot AI </span>打理</h2>
+    <p>开源免费，数据完全自持。如果你觉得项目有用，欢迎点一个 Star ⭐</p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="https://github.com/yuchen0x1/AI-QQ-Bot" target="_blank" rel="noopener">前往 GitHub 仓库</a>
+      <a class="btn btn-ghost" href="https://github.com/yuchen0x1/AI-QQ-Bot/releases" target="_blank" rel="noopener">获取最新 Release</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container foot-inner">
+    <div class="foot-links">
+      <a href="https://github.com/yuchen0x1/AI-QQ-Bot" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/yuchen0x1/AI-QQ-Bot/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="https://github.com/yuchen0x1/AI-QQ-Bot/blob/main/API.md" target="_blank" rel="noopener">API 文档</a>
+      <a href="https://github.com/yuchen0x1/AI-QQ-Bot/blob/main/SECURITY.md" target="_blank" rel="noopener">安全说明</a>
+    </div>
+    <p class="foot-note">
+      QBot AI · MIT License · 基于 QQ 开放平台官方机器人 API 构建，与腾讯官方无关联。<br>
+      请遵守平台规则与当地法律法规使用本软件，仅供学习与自托管用途。
+    </p>
+  </div>
+</footer>
+
+<script>
+  // 滚动浮现
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting) { e.target.classList.add('visible'); io.unobserve(e.target); }
+    }
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+  // 复制部署命令
+  const copyBtn = document.getElementById('copyDeploy');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => {
+      const text =
+`git clone https://github.com/yuchen0x1/AI-QQ-Bot.git
+cd AI-QQ-Bot && cp .env.example .env
+docker compose up -d --build`;
+      const done = () => { copyBtn.textContent = '已复制 ✓'; setTimeout(() => copyBtn.textContent = '复制', 1800); };
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(done).catch(() => {});
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); done(); } catch (_) {}
+        ta.remove();
+      }
+    });
+  }
+</script>
+</body>
+</html>

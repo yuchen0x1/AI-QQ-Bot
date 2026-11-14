@@ -1,5 +1,7 @@
 # QBot AI 多账号智能 QQ 机器人管理平台
 
+**🌐 在线宣传页**：<https://qbot-ai.edgeone.dev> —— 功能特性、接入方式与快速部署的介绍站点。
+
 面向 Linux 服务器的模块化 QQ 机器人管理控制台：使用 **QQ 开放平台官方机器人**，支持多账号隔离、群聊、AI 多供应商、GitHub 仓库动态、QQ 群推送、失败邮件、持久化定时任务与插件扩展。
 
 > QQ 接入仅支持官方机器人：凭 AppID + AppSecret 获取官方 AccessToken，通过 WebSocket 或签名验证的 Webhook 收发事件。管理端默认监听本机回环地址，生产部署需配置 TLS、访问控制和强密码。
