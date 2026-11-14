@@ -77,6 +77,25 @@ async def reload_plugin(
     return await serialize(db, plugin)
 
 
+@router.get("/{plugin_id}/metrics")
+async def get_plugin_metrics(
+    plugin_id: int, db: AsyncSession = Depends(get_db), _: User = Depends(require("plugin:view"))
+):
+    """插件运行指标与权限调用审计；插件代码受信执行，这里只提供可观测性，不宣称沙箱。"""
+    plugin = await db.get(Plugin, plugin_id)
+    if not plugin:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    metrics = plugin_manager.metrics_for(plugin.plugin_id)
+    checks = [
+        entry for entry in reversed(plugin_manager.permission_audit_log) if entry["plugin_id"] == plugin.plugin_id
+    ]
+    return {
+        "plugin_id": plugin.plugin_id,
+        **metrics.as_dict(),
+        "permission_checks": checks[:50],
+    }
+
+
 @router.get("/{plugin_id}/bindings")
 async def list_bindings(plugin_id: int, db: AsyncSession = Depends(get_db), _: User = Depends(require("plugin:view"))):
     plugin = await db.get(Plugin, plugin_id)

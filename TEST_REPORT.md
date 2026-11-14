@@ -1,5 +1,28 @@
 # TEST_REPORT
 
+## 路线图收口：2026-11-14（v1.3.0 发布、跨实例广播、容器验收、插件可观测性）
+
+| 状态 | 命令或范围 | 结果 |
+|---|---|---|
+| PASS | `python scripts/prepare_release.py --tag v1.3.0 --notes-output …`；pytest 185 项；Ruff；`npm run build` | 预发布检查全绿 |
+| PASS | `git push origin v1.3.0` → GitHub Actions Release 工作流（run 43560479144） | 全部步骤通过，发布 [v1.3.0](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.3.0) 为 Latest，附件 zip / tar.gz / native.tar.gz / SHA256SUMS |
+| PASS | `pytest tests/test_event_broadcast.py`（无 Redis 环境） | 5 项通过：跨实例送达、回环去重、信封校验、坏载荷忽略、无 broker 时事件 id 存在 |
+| PASS | `REDIS_TEST_URL=redis://…@127.0.0.1:16379 pytest tests/test_event_broadcast.py`（Redis 为 compose 容器经 socat 转发） | 6 项全部通过：**双进程真实 Redis 跨实例广播验收**，订阅确认（subscribe ack）后才发布 |
+| PASS | `docker compose up -d`（本机 Docker Desktop 29.9.3，随机凭据 `.env`） | postgres / redis / backend / frontend / nginx 全部 healthy |
+| PASS | `curl /api/system/health` | HTTP 200，`{"status":"ok","database":true,"version":"1.3.0"}` |
+| PASS | 管理员登录 + `GET /api/accounts`（PostgreSQL） | 200；`information_schema` 迁移出 34 张表 |
+| PASS | `docker compose --profile workers up -d worker` | worker 健康，插件加载，未开队列时空转告警符合设计 |
+| PASS | 容器内广播接线 | backend 日志出现「跨实例事件广播已启用：qbot:events」与「已订阅 Redis 事件频道」 |
+| PASS | `POST /api/system/backup` → 恢复演练 | 生成 `/backups/qbot-20261114-055119.sql.gz`；灌入全新 `qbot_restore_test` 库还原 34 张表 |
+| PASS | `pytest tests/test_plugin_metrics.py` | 4 项通过：耗时/错误率记录、has_permission 审计（含拒绝计数）、`GET /plugins/{id}/metrics` 暴露、未登录 401 |
+| PASS | 全量回归 `pytest -q`（backend） | **195 项通过，0 失败，0 错误，1 跳过**（跳过项为未设置 REDIS_TEST_URL 的可选真实 Redis 用例） |
+| PASS | `ruff check app tests`；`npm run build` | All checks passed；前端无改动，构建通过 |
+| BLOCKED | 生产服务器在线升级验收 | v1.3.0 已发布，但服务器 `authorized_keys` 缺失控制台绑定公钥（11-14 重装后未注入），SSH 无法登录；等待管理员用控制台网页终端补公钥后执行升级并按持久化任务/版本/账号/群绑定/邮件授权验收 |
+
+本轮实现要点：`EventHub` 发布侧新增跨实例转发（后台任务强引用，避免 create_task 弱引用被 GC 静默丢弃）、事件 id 去重窗口、信封校验；新增 `RedisEventBroker`（订阅确认后才算就绪，断线重连）；lifespan 按 `REDIS_ENABLED` 接线；`REDIS_EVENTS_CHANNEL` 进入 `.env.example`。插件侧新增 `PluginMetrics` 与权限审计环形缓冲，`has_permission` 每次判定记录在案。新增 `docs/AGENT_MCP_KNOWLEDGE_DESIGN.md` 设计评审稿（工具权限、任务隔离、数据保留、审计、威胁模型、分阶段落地）。插件与工具仍视为受信代码，不宣称沙箱。
+
+过程中发现并修复：`hub.publish` 后台转发任务因仅被事件循环弱引用而在 Redis IO 挂起期间被 GC；`broker.start()` 不等待 subscribe 确认导致发布早于订阅。两者均有回归测试覆盖。
+
 ## 一键升级准备：2026-11-14（v1.3.0）
 
 - PASS：`python -m pytest -q --tb=short --junitxml=../data/native-updater-tests.xml`，185 项通过，0 失败、0 错误、0 跳过。

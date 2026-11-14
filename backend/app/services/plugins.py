@@ -8,7 +8,10 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import time
+from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -26,6 +29,54 @@ ALLOWED_PERMISSIONS = {
     "ai:request",  # 请求 AI（需平台显式授权）
     "http:request",  # 发起外部 HTTP 请求
 }
+
+# 权限调用审计环形缓冲长度；仅保留最近记录，避免高频插件撑爆内存。
+_PERMISSION_AUDIT_MAXLEN = 300
+
+
+@dataclass
+class PluginMetrics:
+    """单插件运行指标：调用次数、错误率与执行耗时。"""
+
+    invocations: int = 0
+    errors: int = 0
+    total_duration_ms: float = 0.0
+    last_duration_ms: float | None = None
+    last_error: str | None = None
+    last_error_at: str | None = None
+    last_run_at: str | None = None
+    permission_denied: int = 0
+
+    def record(self, duration_ms: float, error: str | None) -> None:
+        self.invocations += 1
+        self.total_duration_ms += duration_ms
+        self.last_duration_ms = round(duration_ms, 2)
+        self.last_run_at = datetime.now(timezone.utc).isoformat()
+        if error is not None:
+            self.errors += 1
+            self.last_error = error
+            self.last_error_at = self.last_run_at
+
+    @property
+    def error_rate(self) -> float:
+        return round(self.errors / self.invocations, 4) if self.invocations else 0.0
+
+    @property
+    def avg_duration_ms(self) -> float:
+        return round(self.total_duration_ms / self.invocations, 2) if self.invocations else 0.0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "invocations": self.invocations,
+            "errors": self.errors,
+            "error_rate": self.error_rate,
+            "avg_duration_ms": self.avg_duration_ms,
+            "last_duration_ms": self.last_duration_ms,
+            "last_error": self.last_error,
+            "last_error_at": self.last_error_at,
+            "last_run_at": self.last_run_at,
+            "permission_denied": self.permission_denied,
+        }
 
 
 @dataclass
@@ -49,6 +100,8 @@ class PluginContext:
     commands: dict[str, PluginHandler] = field(default_factory=dict)
     message_hooks: list[PluginHandler] = field(default_factory=list)
     command_meta: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # 由 PluginManager 在加载时注入；has_permission 的每次判定都会进入权限审计。
+    permission_audit: Callable[[str, bool], None] | None = field(default=None, repr=False, compare=False)
 
     def add_command(
         self, name: str, handler: PluginHandler, *, description: str = "", aliases: list[str] | None = None
@@ -62,7 +115,10 @@ class PluginContext:
         self.message_hooks.append(handler)
 
     def has_permission(self, permission: str) -> bool:
-        return permission in self.permissions
+        allowed = permission in self.permissions
+        if self.permission_audit is not None:
+            self.permission_audit(permission, allowed)
+        return allowed
 
 
 @dataclass
@@ -75,6 +131,24 @@ class LoadedPlugin:
 class PluginManager:
     def __init__(self) -> None:
         self.loaded: dict[str, LoadedPlugin] = {}
+        self.metrics: dict[str, PluginMetrics] = {}
+        # 权限调用审计：最近的判定记录（plugin_id/permission/allowed/time）。
+        self.permission_audit_log: deque[dict[str, Any]] = deque(maxlen=_PERMISSION_AUDIT_MAXLEN)
+
+    def metrics_for(self, plugin_id: str) -> PluginMetrics:
+        return self.metrics.setdefault(plugin_id, PluginMetrics())
+
+    def record_permission_check(self, plugin_id: str, permission: str, allowed: bool) -> None:
+        if not allowed:
+            self.metrics_for(plugin_id).permission_denied += 1
+        self.permission_audit_log.append(
+            {
+                "plugin_id": plugin_id,
+                "permission": permission,
+                "allowed": allowed,
+                "time": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     # ------------------------------------------------------------------
     def discover(self) -> list[dict[str, Any]]:
@@ -146,6 +220,9 @@ class PluginManager:
                 raise AttributeError("插件必须实现 register(ctx) 函数")
             permissions = set(plugin.permissions or [])
             ctx = PluginContext(plugin_id=plugin.plugin_id, config=dict(plugin.config or {}), permissions=permissions)
+            ctx.permission_audit = lambda permission, allowed, plugin_id=plugin.plugin_id: self.record_permission_check(
+                plugin_id, permission, allowed
+            )
             register(ctx)
             loaded = LoadedPlugin(plugin_id=plugin.plugin_id, ctx=ctx, module=module)
             self.loaded[plugin.plugin_id] = loaded
@@ -238,20 +315,28 @@ class PluginManager:
             )
             handler = loaded.ctx.commands.get(token)
             if handler:
+                metrics = self.metrics_for(plugin_id)
+                started = time.perf_counter()
                 try:
                     reply = await handler(message)
                     if reply:
                         replies.append(reply)
+                    metrics.record((time.perf_counter() - started) * 1000, None)
                 except Exception as exc:  # noqa: BLE001
+                    metrics.record((time.perf_counter() - started) * 1000, f"{type(exc).__name__}: {exc}")
                     logger.exception("插件命令执行失败 %s", plugin_id)
                     replies.append(f"插件 {plugin_id} 执行出错：{type(exc).__name__}")
                 continue
             for hook in loaded.ctx.message_hooks:
+                metrics = self.metrics_for(plugin_id)
+                started = time.perf_counter()
                 try:
                     reply = await hook(message)
                     if reply:
                         replies.append(reply)
-                except Exception:  # noqa: BLE001
+                    metrics.record((time.perf_counter() - started) * 1000, None)
+                except Exception as exc:  # noqa: BLE001
+                    metrics.record((time.perf_counter() - started) * 1000, f"{type(exc).__name__}: {exc}")
                     logger.exception("插件消息钩子执行失败 %s", plugin_id)
         return replies
 
