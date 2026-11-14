@@ -8,7 +8,7 @@
 | PASS | `pytest --tb=short -q`（backend 全量） | 229 项通过，0 失败（exit 0） |
 | PASS | `ruff check app tests migrations`、`npm run build`（frontend） | 通过；guideContent 课程顺序与后端步骤一致（QQ→AI→GitHub→群→验证→邮件），helpArticles 9→12 篇 |
 | PASS | `prepare_release.py --tag v1.4.5` | 三件套版本一致、canonical notes 就绪 |
-| （待补） | Release 工作流 / 生产验收 | 随 tag v1.4.5 触发，结果待回填 |
+| PASS | Release 工作流（v1.4.5） | `qbot-ai-1.4.5-native.tar.gz` / tar.gz / zip / SHA256SUMS 全部上传；生产验收随后台升级进行 |
 
 ## v1.4.4 发布：2026-11-14（AI 供应商自动获取模型） 发布：2026-11-14（AI 供应商自动获取模型）
 
