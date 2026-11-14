@@ -8,7 +8,7 @@
 | PASS | `pytest --tb=short -q`（backend 全量） | 230 项通过，0 失败（exit 0） |
 | PASS | `ruff check app tests migrations`、`npm run build`（frontend） | 通过；LogsView 页头新增「日志保留」选择器（1/3/7/14/30/永久），带清理范围 tooltip，移动端自适应 |
 | PASS | `prepare_release.py --tag v1.4.6` | 三件套版本一致、canonical notes 就绪 |
-| （待补） | Release 工作流 / 生产验收 | 随 tag v1.4.6 触发，结果待回填 |
+| PASS | Release 工作流（v1.4.6） | `qbot-ai-1.4.6-native.tar.gz` / tar.gz / zip / SHA256SUMS 全部上传；生产验收随后台升级进行 |
 
 ## v1.4.5 发布：2026-11-14（新手指引六步升级） 发布：2026-11-14（新手指引六步升级）
 
