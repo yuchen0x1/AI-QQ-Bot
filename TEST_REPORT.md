@@ -8,8 +8,10 @@
 | PASS | `pytest -q`（backend 全量） | 219 项通过，0 失败，1 项既有跳过（共 220 项；exit 0，本机终端不回显 summary 行） |
 | PASS | `ruff check app tests migrations`、`ruff check scripts/updater` | 通过 |
 | PASS | `prepare_release.py --tag v1.4.1` | 三件套版本一致、canonical notes 就绪 |
-| PASS | 镜像真实连通性（生产服务器） | 见下方部署记录 |
-| （待补） | Release 工作流 | 随 tag v1.4.1 触发，结果待回填 |
+| PASS | 生产服务器镜像实测（VM-0-15-ubuntu，2MB 区间测速） | 直连 12.9KB/s；ghfast.top 230KB/s（约 18 倍）；gh-proxy.com 73KB/s；ghproxy.net/moeyy 不可用已排除；TUNA PyPI 0.23s；api.github.com 1.1s |
+| PASS | 生产部署（不触碰运行中的机器人） | `install -m 0644` 覆盖 `/usr/local/lib/qbot-updater/{daemon,build_environment}.py`；`/etc/qbot/updater.json` 写入 `download_mirrors=[ghfast.top, gh-proxy.com]`、`pip_index_url=TUNA`；重启后 qbot / qbot-updater 双服务 active |
+| PASS | 新代码端到端验证（服务器上 import 已装 daemon 实测） | 镜像加载顺序 ghfast.top → gh-proxy.com → DIRECT；元数据 0.8s；强制走 ghfast.top 下载 v1.4.0 升级包 1.2MB/10.6s（116KB/s），SHA-256 与 GitHub digest 一致；测试残留已清理 |
+| PASS | Release 工作流（run 43602960981，2m14s） | v1.4.1 已发布：`qbot-ai-1.4.1-native.tar.gz`（1.2MB）/ tar.gz / zip / SHA256SUMS 全部上传；main CI 同批通过 |
 
 ## v1.4.0 发布：2026-11-14（GitHub 通知官方 Markdown 卡片）
 
