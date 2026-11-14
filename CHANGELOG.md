@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 2026-11-14 — 归档卡片崩溃修复与卡片默认开启（v1.4.3）
+
+- **崩溃修复**：`normalize_activity` 的 create/delete（创建/删除分支或标签）分支漏赋 `card`，仓库出现此类事件后每轮检查都抛 `UnboundLocalError` 并触发告警邮件（生产 PROJECT-NEXUS 每 5 分钟一次）。补上活动卡片数据，积压事件升级后自动消化。
+- **卡片默认开启**：模型默认值改 `True`；迁移 `0013_markdown_card_default_on` 将存量 107 条规则全部翻开；`reconcile_rules` 自动建规则带 `markdown_card=True`；新建规则的 API 与前端表单默认开启。此前生产从未真正发过卡片（全库规则无一开启，纯文本投递）。降级保护不变：无 Markdown 权限或发送被拒自动回退纯文本。
+- 验证：新增 2 项回归测试（create/delete 事件卡片投递、新建规则默认开卡片）；后端全量 pytest 通过、Ruff 通过；`prepare_release.py --tag v1.4.3` 校验通过。
+
 ## 2026-11-14 — 归档仓库自动移除与 SQLite 外键修复（v1.4.2）
 
 - **归档自动移除**：`monitor.py` 新增 `remove_archived_repository`——轮询 `check_repository`（`get_repo` 的 `archived` 字段，零额外请求）与 Webhook `repository/archived` 事件都会触发：先向绑定的启用通知群（按账号+群去重）尽力发送告知消息，再取消调度、删除仓库行（级联版本/规则/事件/推送记录）、写系统日志；通知失败不阻塞移除。

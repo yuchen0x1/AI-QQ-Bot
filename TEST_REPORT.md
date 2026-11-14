@@ -1,5 +1,17 @@
 # TEST_REPORT
 
+## v1.4.3 发布：2026-11-14（归档卡片崩溃修复 + 卡片默认开启）
+
+| 状态 | 命令或范围 | 结果 |
+|---|---|---|
+| PASS | 生产日志诊断（VM-0-15-ubuntu） | `检查仓库 PROJECT-NEXUS 失败：cannot access local variable 'card'` 每 5 分钟重复（14:24–14:44 UTC 共 5 次+）；根因 v1.4.0 `normalize_activity` create/delete 分支漏赋 card，标签/分支事件触发后整轮检查失败并反复告警 |
+| PASS→FIXED | `normalize_activity` create/delete 回归 | 分支补活动卡片数据；新增测试：create + delete 事件均正常入库、群消息与 markdown 内容含「删除标签」 |
+| PASS→FIXED | 生产从未发送卡片（107 条规则 markdown_card 全为 0） | 模型/Schema/前端新建默认改 True；迁移 0013 全量翻开存量规则；reconcile_rules 自动建规则带上开关；新增测试：API 新建规则默认 markdown_card=True |
+| PASS | `pytest --tb=short -q`（backend 全量） | 226 项通过，0 失败（exit 0） |
+| PASS | `ruff check app tests migrations` | 通过 |
+| PASS | `prepare_release.py --tag v1.4.3` | 三件套版本一致、canonical notes 就绪 |
+| （待补） | Release 工作流 / 生产验收 | 随 tag v1.4.3 触发，结果待回填 |
+
 ## v1.4.2 发布：2026-11-14（归档仓库自动移除 + SQLite 外键修复）
 
 | 状态 | 命令或范围 | 结果 |
