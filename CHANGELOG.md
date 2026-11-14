@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 2026-11-14 — 归档仓库自动移除与 SQLite 外键修复（v1.4.2）
+
+- **归档自动移除**：`monitor.py` 新增 `remove_archived_repository`——轮询 `check_repository`（`get_repo` 的 `archived` 字段，零额外请求）与 Webhook `repository/archived` 事件都会触发：先向绑定的启用通知群（按账号+群去重）尽力发送告知消息，再取消调度、删除仓库行（级联版本/规则/事件/推送记录）、写系统日志；通知失败不阻塞移除。
+- **防回流**：OAuth 全量同步（`sync_subscription`）跳过 `archived` 仓库，删除后不会被重新导入；`create_monitored_repo` 拒绝添加归档仓库（API 返回 400 与原因）。仓库删除/转移仍按既有「不可访问」语义保留历史。
+- **SQLite 外键修复**：`app/db/session.py` 连接事件显式执行 `PRAGMA foreign_keys=ON`——此前 31 个外键的 `ondelete=CASCADE/SET NULL` 在 SQLite（含原生部署）从未生效，删除父记录会残留孤儿行；现在与 PostgreSQL 一致。测试同步修正两处引用不存在父记录的种子数据（retention / card），新增 4 项测试覆盖轮询移除+群通知、Webhook 移除、添加拒绝、同步防回流。
+- 验证：后端全量 pytest 通过（224 项，exit 0）、Ruff 通过；`prepare_release.py --tag v1.4.2` 校验通过。
+
 ## 2026-11-14 — 升级服务国内镜像加速（v1.4.1）
 
 - **下载镜像**：原生升级服务 `/etc/qbot/updater.json` 新增 `download_mirrors`——升级包按 gh-proxy 风格前缀镜像逐源下载（每源独立 300s 超时），全部失败自动回退 GitHub 直连；镜像仅作传输通道，SHA-256 digest 仍以直连 `api.github.com` 的元数据为锚，重定向白名单扩展为「镜像主机 ∪ GitHub 主机」，非法镜像条目启动时被忽略。

@@ -1,5 +1,16 @@
 # TEST_REPORT
 
+## v1.4.2 发布：2026-11-14（归档仓库自动移除 + SQLite 外键修复）
+
+| 状态 | 命令或范围 | 结果 |
+|---|---|---|
+| PASS | `pytest tests/test_github.py tests/test_github_notifications.py`（新增 4 项） | 轮询发现 archived → 移出列表 + 级联删除推送规则 + 绑定群收到告知消息（adapter.outbox 断言）；Webhook `repository/archived` 事件同样移除；手动添加归档仓库被 400 拒绝；OAuth 同步跳过归档仓库，删除后不会被重新导入 |
+| PASS→FIXED | 全量 pytest 暴露 SQLite 外键从未生效 | `PRAGMA foreign_keys=ON` 连接事件修复；随后暴露并修复 2 处测试种子假外键（retention 用 repository_id=1 / card 用 account_id=1），并确认归档移除后孤儿推送记录不再残留（即 card 回退测试失败暴露的 id 复用冲突根因） |
+| PASS | `pytest --tb=short -q`（backend 全量） | 224 项通过，0 失败（exit 0） |
+| PASS | `ruff check app tests migrations ../scripts/updater` | 通过 |
+| PASS | `prepare_release.py --tag v1.4.2` | 三件套版本一致、canonical notes 就绪 |
+| （待补） | Release 工作流 / 生产验收 | 随 tag v1.4.2 触发，结果待回填 |
+
 ## v1.4.1 发布：2026-11-14（升级服务国内镜像加速）
 
 | 状态 | 命令或范围 | 结果 |
