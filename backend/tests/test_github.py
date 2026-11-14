@@ -370,3 +370,21 @@ async def test_add_archived_repo_rejected(client: httpx.AsyncClient, admin_heade
     assert "已被作者归档" in created.json()["detail"]
     listed = (await client.get("/api/github/repos", headers=admin_headers)).json()
     assert all(r["full_name"] != "octocat/archived" for r in listed)
+
+
+async def test_new_push_rule_defaults_markdown_card_on(client: httpx.AsyncClient, admin_headers: dict, mock_account: dict):
+    repo = await _add_repo(client, admin_headers)
+    rule = await client.post(
+        "/api/github/push-rules",
+        headers=admin_headers,
+        json={
+            "repository_id": repo["id"],
+            "account_id": mock_account["id"],
+            "qq_group": 900002,
+            "ai_summary": False,
+            "only_stable": True,
+            "mention_user_ids": [],
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    assert rule.json()["markdown_card"] is True

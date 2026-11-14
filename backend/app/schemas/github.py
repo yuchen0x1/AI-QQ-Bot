@@ -95,7 +95,7 @@ class PushRuleCreate(BaseModel):
     include_changelog: bool = True
     include_downloads: bool = True
     ai_summary: bool = True
-    markdown_card: bool = False
+    markdown_card: bool = True
     mention_user_ids: list[int] = []
     template: str | None = None
 
@@ -123,7 +123,7 @@ class PushRuleOut(ORMModel):
     include_changelog: bool
     include_downloads: bool
     ai_summary: bool
-    markdown_card: bool = False
+    markdown_card: bool = True
     mention_user_ids: list[int] = []
     template: str | None = None
     last_pushed_at: datetime | None = None

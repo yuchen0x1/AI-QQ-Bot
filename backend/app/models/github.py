@@ -116,7 +116,7 @@ class PushRule(Base, TimestampMixin):
     ai_summary: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # 官方 Markdown 卡片（msg_type=2 + keyboard 按钮）：需机器人拥有 Markdown 权限，
     # 未开通时发送层自动降级纯文本，不会中断推送。
-    markdown_card: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    markdown_card: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     mention_user_ids: Mapped[list[int]] = mapped_column(JSON, default=list, nullable=False)
     template: Mapped[str | None] = mapped_column(Text)
     event_types: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["release"], nullable=False)

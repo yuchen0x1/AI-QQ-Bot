@@ -295,3 +295,17 @@ async def test_dispatch_release_falls_back_to_text_when_card_rejected(client, ad
     sent = adapter.outbox[-1]
     assert sent["markdown"] is None and sent["keyboard"] is None
     assert "GitHub 项目更新通知" in sent["message"]
+
+
+async def test_create_and_delete_events_push_card(client, admin_headers, db, mock_account):
+    """v1.4.2 在 create/delete 分支漏赋 card 导致 UnboundLocalError，仓库检查整轮失败。"""
+    adapter, repo, rule = await _card_rule_fixture(client, admin_headers, db, mock_account, "card-create-delete", 123460789)
+    rule.event_types = ["push", "create", "delete"]
+    await db.commit()
+    created = await ingest_activity(db, repo, "create", {"ref": "v1.2.3", "ref_type": "tag", "sender": {"login": "notifier"}}, source="webhook")
+    assert created["pushed"] == 1
+    deleted = await ingest_activity(db, repo, "delete", {"ref": "v1.2.3", "ref_type": "tag", "sender": {"login": "notifier"}}, source="webhook")
+    assert deleted["pushed"] == 1
+    sent = adapter.outbox[-1]
+    assert "删除标签" in sent["message"]
+    assert sent["markdown"] and "删除标签" in sent["markdown"]["content"]

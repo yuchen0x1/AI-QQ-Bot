@@ -91,6 +91,11 @@ def normalize_activity(repo: GithubRepository, event_type: str, payload: dict[st
     elif event_type in {"create", "delete"}:
         identity = [payload.get("ref_type"), payload.get("ref"), payload.get("_event_id") or payload.get("_delivery_id")]
         title = f"{actor} {'创建' if event_type == 'create' else '删除'}{'标签' if payload.get('ref_type') == 'tag' else '分支'} {payload.get('ref') or ''}"
+        card = {
+            "kind": "activity", "event_type": event_type, "label": EVENT_LABELS[event_type],
+            "title": title, "detail": "", "author": actor,
+            "url": repo.html_url, "repo_url": repo.html_url,
+        }
     else:
         entity = next((payload[k] for k in ("comment", "review", "workflow_run", "release", "pull_request", "issue", "discussion", "forkee", "member", "repository") if isinstance(payload.get(k), dict)), {})
         number = (payload.get("issue") or payload.get("pull_request") or payload.get("discussion") or {}).get("number") or payload.get("number")

@@ -200,7 +200,8 @@ async def reconcile_rules(db: AsyncSession, user_id: int, repo_ids: list[int] | 
                     async with db.begin_nested():
                         db.add(PushRule(repository_id=repo.id, account_id=target.account_id, qq_group=target.qq_group,
                                         managed_by_user_id=user_id, notification_target_id=target.id,
-                                        event_types=value.get("event_types") or ["release"], enabled=True, only_stable=False, ai_summary=False))
+                                        event_types=value.get("event_types") or ["release"], enabled=True, only_stable=False, ai_summary=False,
+                                        markdown_card=True))
                         await db.flush()
                 except IntegrityError:
                     pass  # A concurrent binding/sync already attached this destination.
