@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     # ---------- Redis ----------
     redis_url: str = "redis://localhost:6379/0"
     redis_enabled: bool = False
+    redis_events_channel: str = "qbot:events"
     redis_queue_enabled: bool = False
     redis_queue_name: str = "qbot:tasks"
     instance_id: str = ""

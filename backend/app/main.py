@@ -43,6 +43,15 @@ async def lifespan(app: FastAPI):
     async with SessionLocal() as db:
         stats = await plugin_manager.load_all(db)
         logger.info("插件加载结果：%s", stats)
+    event_broker = None
+    if settings.redis_enabled:
+        from app.core.event_broker import RedisEventBroker
+        from app.core.events import event_hub
+
+        event_broker = RedisEventBroker(settings.redis_url, settings.redis_events_channel)
+        event_hub.set_broker(event_broker)
+        await event_broker.start()
+        logger.info("跨实例事件广播已启用：%s", settings.redis_events_channel)
     from app.services.runtime_start import start_runtime
     from pathlib import Path
     runtime_task = None
@@ -56,6 +65,11 @@ async def lifespan(app: FastAPI):
         await write_log(db, level="INFO", category="system", message="平台启动完成")
     yield
     logger.info("正在关闭平台……")
+    if event_broker is not None:
+        await event_broker.stop()
+        from app.core.events import event_hub
+
+        event_hub.set_broker(None)
     if runtime_task:
         runtime_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
