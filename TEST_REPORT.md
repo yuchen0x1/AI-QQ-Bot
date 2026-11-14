@@ -1,6 +1,18 @@
 # TEST_REPORT
 
-## 生产在线升级验收：2026-11-14（v1.1.0 → v1.3.0，真实宿主机）
+## v1.3.1 发布：2026-11-14（图表遮挡 / 空错误吐司 / 通知排版 / 群同步并发）
+
+| 状态 | 命令或范围 | 结果 |
+|---|---|---|
+| PASS | 浏览器实测（生产页面 CSS 注入 + 桌面/移动截图） | 图表 X 轴日期遮挡修复、页面其他位置无重叠 |
+| PASS | 浏览器实测（XHR + toast 监听器，遍历 7 个页面点击刷新） | 空错误吐司根因：`@click="load"` 事件对象误作页码 → `page=[object PointerEvent]` 422 → `ElMessage.error(数组)` 渲染空框；已修复并加固拦截器 |
+| PASS | `pytest tests/test_release_message_format.py` 等通知测试（26 项） | 通知表格转纯文本、资产去噪、默认模板去重下载段 |
+| BLOCKED→FIXED | CI `test_each_group_has_independent_binding_code` 首次复现群同步并发缺陷 | 启动自动同步与手动同步并发时先查后插撞 `(account_id, group_number)` 唯一约束；`sync_groups` 改 ON CONFLICT 幂等写入（SQLite/PG 双方言），新增并发回归测试 |
+| PASS | `pytest -q`（backend） | **201 项通过，0 失败** |
+| PASS | `prepare_release.py --tag v1.3.1`、Ruff、前端构建、Release 工作流（run 43571708804） | 全部通过；v1.3.1 含 zip / tar.gz / native.tar.gz / SHA256SUMS |
+| PASS | 生产服务器 `push_default_template` 自定义模板已清除（原值备份于 `/home/ubuntu/push_default_template.backup.txt`） | 升级后通知即用新内置格式；若管理员重存自定义模板则以其为准 |
+
+## 生产在线升级验收：2026-11-14（v1.1.0 → v1.3.0，真实宿主机）：2026-11-14（v1.1.0 → v1.3.0，真实宿主机）
 
 | 状态 | 范围 | 结果 |
 |---|---|---|
