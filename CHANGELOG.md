@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 2026-11-14 — GitHub 通知官方 Markdown 卡片（v1.4.0）
+
+- **卡片渲染**：新增 `app/services/github/card.py`——代码推送渲染标题 / 分支 / 提交内容 / 变化文件 / 行数统计 / 提交信息的官方原生 Markdown 深色卡片（msg_type=2）+ keyboard 跳转按钮；Issue、PR、Star 等动态走通用卡片；版本发布通知经 `render_release_message` 双产出（纯文本 + 卡片数据）。
+- **开关与持久化**：`push_rules.markdown_card` 逐规则开关（默认关闭）；发布卡片数据存 `push_records.card_payload`（迁移 `0012_push_rule_markdown_card`），重试 / 手动重发仍以卡片投递；动态事件按 `event_id` 现场渲染。
+- **硬性降级**：`send_push_record` 统一投递入口——卡片渲染失败、机器人无 Markdown / 按钮权限、接口拒绝时自动降级纯文本重发并记 WARNING 日志，推送永不中断；旧记录无卡片数据自动回退纯文本。
+- **一致性**：规则的「AI 摘要 / 附带更新日志 / 附带下载地址」开关同样作用于卡片；消息模板仅影响纯文本版；轮询路径复用 compare 响应补充行数统计（`payload._compare`）。
+- 验证：`tests/test_github_card.py` 11 项（渲染结构 / keyboard 约束 / 围栏中和 / 降级路径 / 重试发卡）；后端全量 pytest 通过、Ruff 通过、前端构建通过。
+
 ## 2026-11-08 — 后台两步验证与登录会话管理
 
 - **TOTP 两步验证**：新增 `app/core/totp.py`（标准库实现，Base32 密钥、HMAC-SHA1、6 位 / 30 秒、前后各容忍 1 个时间窗、`otpauth://` URI），无新增第三方依赖。`users` 增加 `totp_secret_enc`（Fernet 加密）、`totp_enabled`、`totp_last_counter`（防同一时间窗重放）、`totp_challenge_nonce`。
