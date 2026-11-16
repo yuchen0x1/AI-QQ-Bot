@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Protocol
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 from app.services.github.client import GithubClient
 
@@ -31,9 +31,7 @@ class GiteeClient(GithubClient):
         return headers
 
     async def _get(self, path: str, *, accept: str = "application/json") -> Any:
-        # Gitee v5 对 token 使用 query 参数，避免与 GitHub Bearer 头差异。
-        if self.token and "access_token=" not in path:
-            path += ("&" if "?" in path else "?") + f"access_token={quote(self.token)}"
+        # 认证只通过请求头发送；不要把 Token 放进 URL（会进入代理、访问日志和追踪记录）。
         return await super()._get(path, accept=accept)
 
     async def get_repo(self, owner: str, name: str) -> dict[str, Any]:

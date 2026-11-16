@@ -28,6 +28,8 @@ jobs:
         working-directory: backend
         run: |
           python -m pip install -r requirements.txt -r requirements-dev.txt
+          python -m pip check
+          python -m compileall -q app tests migrations
           python -m pytest -q
           python -m ruff check app tests
       - uses: actions/setup-node@v4
@@ -44,8 +46,10 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
         run: |
+          docker compose --env-file .env.example config --no-env-resolution --quiet
           docker build --tag qbot-backend:${VERSION} backend
           docker build --tag qbot-frontend:${VERSION} frontend
+          git diff --check
       - name: Package source and checksums
         env:
           VERSION: ${{ github.ref_name }}
@@ -61,6 +65,7 @@ jobs:
           python scripts/package_native.py --tag "${VERSION}" --output "release/qbot-ai-${VERSION_NUMBER}-native.tar.gz"
           cd release
           sha256sum qbot-ai-*.tar.gz qbot-ai-*.zip > SHA256SUMS
+          sha256sum -c SHA256SUMS
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

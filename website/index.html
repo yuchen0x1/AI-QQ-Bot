@@ -10,7 +10,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://qbot-ai.edgeone.dev/">
 <link rel="canonical" href="https://qbot-ai.edgeone.dev/">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect x='14' y='24' width='72' height='56' rx='16' fill='%2338bdf8'/%3E%3Crect x='40' y='8' width='20' height='18' rx='6' fill='%23818cf8'/%3E%3Ccircle cx='38' cy='50' r='7' fill='%230a0f1e'/%3E%3Ccircle cx='62' cy='50' r='7' fill='%230a0f1e'/%3E%3Crect x='40' y='64' width='20' height='6' rx='3' fill='%230a0f1e'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
   :root {
     --bg: #0a0f1e;
@@ -73,7 +73,12 @@
     padding: 7px 16px; border-radius: 10px; font-weight: 600;
   }
   .nav-links a.btn-nav:hover { color: #0a0f1e; opacity: .9; }
-  @media (max-width: 640px) { .nav-links a:not(.btn-nav) { display: none; } }
+  @media (max-width: 640px) {
+    .nav-inner { min-height: 62px; height: auto; padding-top: 10px; padding-bottom: 10px; align-items: flex-start; gap: 10px; }
+    .nav-links { flex: 1; justify-content: flex-end; flex-wrap: wrap; gap: 5px 10px; }
+    .nav-links a { font-size: 12px; }
+    .nav-links a.btn-nav { padding: 5px 10px; }
+  }
 
   /* Hero */
   .hero { padding: 88px 0 64px; text-align: center; }

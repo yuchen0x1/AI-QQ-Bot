@@ -181,12 +181,19 @@ async def do_backup(db: AsyncSession = Depends(get_db), user: User = Depends(req
         path = await backup_database()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"备份失败：{exc}") from exc
-    keep_row = await db.scalar(select(SystemSetting).where(SystemSetting.key == "auto_backup_keep"))
-    keep = int((keep_row.value or {}).get("value", 14)) if keep_row else 14
+    from app.services.settings_store import read_setting
+
+    raw_keep = await read_setting(db, "auto_backup_keep", 14)
+    try:
+        keep = max(1, int(raw_keep or 14))
+    except (TypeError, ValueError):
+        keep = 14
     removed = prune_backups(keep=keep)
     await write_log(db, level="INFO", category="system", message=f"数据库备份完成：{path.name}，清理旧备份 {removed} 个")
     await audit(db, user_id=user.id, username=user.username, action="backup_database", target=path.name)
-    return {"ok": True, "path": str(path), "pruned": removed, "message": f"备份已生成：{path.name}"}
+    # Return only the generated filename.  Absolute server paths are an
+    # unnecessary information disclosure and are not needed by the UI.
+    return {"ok": True, "path": path.name, "pruned": removed, "message": f"备份已生成：{path.name}"}
 
 
 @router.post("/alert/test")

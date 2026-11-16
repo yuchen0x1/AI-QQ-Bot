@@ -11,17 +11,22 @@
 - `/api/system/health` 在数据库不可用时返回 HTTP 503，避免容器编排把故障实例判为健康。
 - 默认 Compose 仅发布 Nginx 回环端口，内部服务在 `qbot_internal` 网络；容器以非 root `qbot` 用户运行。
 - 生产启动拒绝默认/过短 `SECRET_KEY`、默认/过短 `ADMIN_PASSWORD` 及通配 CORS。
+- 管理台浏览器认证使用 HttpOnly `qbot_token` Cookie；Bearer 令牌仍保留给脚本/API 客户端，前端不再把访问令牌写入 localStorage。
+- GitHub/QQ Webhook 在应用层限制请求体为 2 MiB，避免直接暴露 backend 时仅依赖 Nginx 的 body 限制。
+- SQLite 备份使用 online backup 和临时文件原子替换，备份 API 只返回文件名。
 
 ## 当前风险与真实限制
 
 1. **默认凭据风险**：开发默认值仍是 `SECRET_KEY=change-me...`、`ADMIN_PASSWORD` 代码默认 `admin123`；`.env.example` 已改为占位符，但生产必须显式设置随机值。首次登录后立即改密。
-2. **WS 连接凭据**：前端状态 WebSocket 使用绑定登录会话的短期一次性票据，撤销登录会话后失效；代理仍应对连接日志脱敏并启用 TLS。
+2. **WS 连接凭据**：前端状态 WebSocket 使用绑定登录会话的短期签名票据，撤销登录会话后失效；当前票据尚未实现跨实例的一次性消费标记，代理仍应对连接日志脱敏并启用 TLS。
 3. **官方机器人密钥**：AppSecret 加密保存；仅允许官方协议，未知或已退役协议在参数校验与运行工厂中被拒绝。密钥轮换前需保留旧密钥或完成重新授权。
 4. **Webhook Secret 策略**：当前实现对所有环境统一要求 Secret；仓库未配置 Secret 时返回 **409**，不会接收事件；配置 Secret 后必须通过 HMAC-SHA256 验签，签名错误返回 **401**。开发/测试如需覆盖无密钥路径，应使用专门测试替身，不应放行真实 Webhook 端点。
 5. **插件权限**：插件是动态 Python 代码，虽声明 `message:reply`、`storage:config`、`ai:request`、`http:request` 并通过受限 context 调用，仍不等价于沙箱。只安装审查过的插件，不给不受信插件写权限。
 6. **密钥轮换**：修改 `SECRET_KEY` 会使 JWT 和既有 Fernet 密文不可解；轮换前需制定重新加密/重新登录流程。
 7. **横向扩展**：EventHub 和部分限流为进程内；账号租约已落库，但扩展前仍需验证连接接管、事件广播和共享限流。
 8. **Webhook DNS 风险**：当前校验阻断常见私网目标和 IP 字面量，但未对第三方域名做 DNS 固定/出站防火墙隔离；生产仍应限制 backend 的出站网络和可访问网段。
+9. **发布真实性**：Release 目前有 SHA-256 校验和，但没有签名 manifest、SBOM、SLSA provenance 或容器签名；不要把校验和单独当作发布者身份认证。
+10. **插件执行边界**：插件目录会动态导入 Python，权限声明不是沙箱；只加载审查过的代码，后续路线包含签名 manifest 和隔离执行。
 
 ## 生产基线
 

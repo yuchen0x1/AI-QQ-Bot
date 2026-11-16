@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 import logging
+import os
+import re
+import sqlite3
 import shutil
 import subprocess
+import gzip
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+from uuid import uuid4
 
 from app.core.config import settings
 
@@ -25,6 +31,42 @@ def _timestamp() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
+def _sqlite_path(url: str) -> Path:
+    """Extract a filesystem path from the SQLite SQLAlchemy URL.
+
+    The project uses ``sqlite+aiosqlite:///C:/...`` on Windows and ordinary
+    absolute paths on Unix.  Keep the existing URL compatibility while
+    stripping query options that belong to the SQLite driver.
+    """
+    raw = url.split("///", 1)[-1].split("?", 1)[0]
+    raw = unquote(raw)
+    if raw.startswith("file:"):
+        raw = raw[5:]
+    if os.name == "nt" and re.match(r"^/[A-Za-z]:[\\/]", raw):
+        raw = raw[1:]
+    return Path(raw)
+
+
+def _sqlite_online_backup(source: Path, target: Path) -> None:
+    """Copy a live SQLite database using SQLite's online backup API.
+
+    A byte-for-byte file copy can capture an inconsistent main/WAL pair while
+    the application is writing.  ``Connection.backup`` coordinates with the
+    source database and produces a transactionally consistent snapshot.  The
+    temporary destination is atomically renamed only after the backup closes.
+    """
+    temporary = target.with_name(f".{target.name}.{os.getpid()}-{uuid4().hex}.tmp")
+    try:
+        with closing(sqlite3.connect(str(source), timeout=30)) as source_db, closing(
+            sqlite3.connect(str(temporary), timeout=30)
+        ) as target_db:
+            source_db.backup(target_db, pages=1000, sleep=0.05)
+            target_db.commit()
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _pg_parts(url: str) -> dict[str, str]:
     # 支持 postgresql+asyncpg://user:pass@host:port/db
     cleaned = url.replace("postgresql+asyncpg://", "postgresql://").replace("postgresql+psycopg://", "postgresql://")
@@ -39,16 +81,15 @@ def _pg_parts(url: str) -> dict[str, str]:
 
 
 async def backup_database() -> Path:
-    """备份数据库：SQLite 直接复制文件，PostgreSQL 调用 pg_dump。"""
+    """备份数据库：SQLite 在线备份，PostgreSQL 调用 pg_dump。"""
     url = settings.database_url
     target_dir = _backup_dir()
     if url.startswith("sqlite"):
-        path = url.split("///")[-1]
-        source = Path(path)
+        source = _sqlite_path(url)
         if not source.exists():
             raise FileNotFoundError(f"SQLite 数据库文件不存在：{source}")
         target = target_dir / f"qbot-{_timestamp()}.db"
-        shutil.copy2(source, target)
+        await asyncio.to_thread(_sqlite_online_backup, source, target)
         logger.info("SQLite 备份完成：%s", target)
         return target
 
@@ -74,13 +115,16 @@ async def backup_database() -> Path:
     process = await asyncio.create_subprocess_exec(
         *cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**__import__("os").environ, **env}
     )
-    stdout, stderr = await process.communicate()
-    if process.returncode != 0:
-        raise RuntimeError(f"pg_dump 失败：{stderr.decode('utf-8', 'ignore')[:500]}")
-    import gzip
-
+    assert process.stdout is not None
+    stderr_task = asyncio.create_task(process.stderr.read()) if process.stderr is not None else None
     with gzip.open(target, "wb") as fh:
-        fh.write(stdout)
+        while chunk := await process.stdout.read(1024 * 1024):
+            fh.write(chunk)
+    stderr = await stderr_task if stderr_task is not None else b""
+    await process.wait()
+    if process.returncode != 0:
+        target.unlink(missing_ok=True)
+        raise RuntimeError(f"pg_dump 失败：{stderr.decode('utf-8', 'ignore')[:500]}")
     logger.info("PostgreSQL 备份完成：%s", target)
     return target
 
@@ -91,7 +135,10 @@ def list_backups(limit: int = 50) -> list[dict[str, object]]:
     return [
         {
             "name": f.name,
-            "path": str(f),
+            # Do not expose the server's absolute filesystem layout through a
+            # management API.  The filename is sufficient for display and
+            # preserves the historical response key for clients.
+            "path": f.name,
             "size_mb": round(f.stat().st_size / 1024 / 1024, 2),
             "created_at": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
         }

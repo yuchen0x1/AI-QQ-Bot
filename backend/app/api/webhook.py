@@ -18,6 +18,32 @@ from app.services.logs import write_log
 
 logger = logging.getLogger("qbot.webhook")
 router = APIRouter(prefix="/webhook", tags=["Webhook"])
+MAX_BODY_BYTES = 2 * 1024 * 1024
+
+
+async def _read_body_limited(request: Request) -> bytes:
+    """Read a webhook body with an application-level memory bound.
+
+    Nginx has its own limit, but the backend can also be reached directly in
+    development or through a misconfigured proxy.  Check both the declared
+    length and the streamed bytes because clients can omit or falsify the
+    header.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_BODY_BYTES:
+                raise ValueError("Webhook 请求体过大")
+        except ValueError as exc:
+            raise ValueError("Webhook 请求体过大") from exc
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_BODY_BYTES:
+            raise ValueError("Webhook 请求体过大")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def verify_signature(secret: str, body: bytes, signature: str | None) -> bool:
@@ -34,7 +60,10 @@ async def github_webhook(repo_id: int, request: Request, db: AsyncSession = Depe
     repo = await db.get(GithubRepository, repo_id)
     if not repo:
         raise HTTPException(status_code=404, detail="仓库不存在")
-    body = await request.body()
+    try:
+        body = await _read_body_limited(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     secret = decrypt_secret(repo.webhook_secret_enc) or ""
     signature = request.headers.get("x-hub-signature-256")
     if not secret:

@@ -74,6 +74,16 @@ const status = useStatusStore()
 const { state: socketState } = storeToRefs(status)
 const socket = { state: socketState, reconnect: status.reconnect }
 const socketLabel = computed(() => ({ connecting: '实时连接中', open: '实时同步', closed: '连接已断开', error: '实时连接异常' } as Record<string, string>)[socketState.value] || '系统状态')
+let releaseStatus: (() => void) | undefined
+function startStatus() {
+  if (route.path === '/login' || releaseStatus) return
+  releaseStatus = status.acquire()
+}
+function stopStatus() {
+  releaseStatus?.()
+  releaseStatus = undefined
+  status.stop()
+}
 const navOrder = ['/', '/accounts', '/groups', '/requests', '/messages', '/ai', '/github', '/push-rules', '/push-records', '/tasks', '/email', '/plugins', '/logs', '/system', '/settings', '/help']
 const navItems = computed(() => router.getRoutes().filter(r => r.meta.title && r.path !== '/login').sort((a,b) => navOrder.indexOf(a.path) - navOrder.indexOf(b.path)).map(r => ({ path: r.path, title: String(r.meta.title), icon: String(r.meta.icon || 'Menu'), permission: typeof r.meta.permission === 'string' ? r.meta.permission : '' })))
 const currentTitle = computed(() => String(route.meta.title || '仪表盘'))
@@ -134,22 +144,24 @@ onMounted(async () => {
   }).catch(() => {})
   await loadProfile()
   await checkForUpdateSilently()
-  status.acquire()
+  startStatus()
 })
-onBeforeUnmount(() => mobileQuery?.removeEventListener('change', updateViewport))
+onBeforeUnmount(() => {
+  mobileQuery?.removeEventListener('change', updateViewport)
+  stopStatus()
+})
 watch(() => route.path, (path, previousPath) => {
   mobileNavOpen.value = false
-  if (path === '/login') { userPermissions.value = []; return }
+  if (path === '/login') { userPermissions.value = []; stopStatus(); return }
   if (previousPath === '/login' || !userPermissions.value.length) loadProfile()
-  if (previousPath === '/login') status.reconnect()
-  if (previousPath === '/login') checkForUpdateSilently()
+  if (previousPath === '/login') { startStatus(); checkForUpdateSilently() }
 })
 
 async function handleUserCommand(command: string) {
   if (command === 'logout') {
     try { await api.post('/auth/logout') } catch {}
-    localStorage.removeItem('qbot_token')
     userPermissions.value = []
+    stopStatus()
     router.push('/login')
   }
   if (command === 'password') {
@@ -168,7 +180,6 @@ async function submitChangePassword() {
         old_password: pwdForm.value.old_password,
         new_password: pwdForm.value.new_password,
       })
-      if (data.access_token) localStorage.setItem('qbot_token', data.access_token)
       ElMessage.success(data.detail || '密码已修改，请妥善保存')
       pwdDialogVisible.value = false
     } catch (err: any) {

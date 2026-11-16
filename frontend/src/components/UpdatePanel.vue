@@ -43,8 +43,7 @@ async function check(notify = false) {
 }
 async function poll() {
   try {
-    const token = localStorage.getItem('qbot_token')
-    const response = await fetch('/api/system/update/install', { headers: token ? { Authorization: `Bearer ${token}` } : {}, cache: 'no-store', signal: AbortSignal.timeout(8000) })
+    const response = await fetch('/api/system/update/install', { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(8000) })
     if (response.status === 401) { reconnecting.value = false; info.value.error = '登录已过期，请重新登录后查看升级结果'; return }
     if (!response.ok) throw new Error('waiting')
     const data = await response.json()

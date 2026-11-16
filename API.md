@@ -1,12 +1,12 @@
 # API
 
-API 前缀为 `/api`，Swagger 为 `/api/docs`，OpenAPI 为 `/api/openapi.json`。除登录、健康检查、Webhook、OneBot 接入外，接口按 JWT + RBAC 保护；JWT 可放 `Authorization: Bearer <token>`，登录也设置 HttpOnly Cookie。
+API 前缀为 `/api`，Swagger 为 `/api/docs`，OpenAPI 为 `/api/openapi.json`。除登录、健康检查、Webhook、OneBot 接入外，接口按 JWT + RBAC 保护。浏览器管理台使用登录响应设置的 HttpOnly `qbot_token` Cookie；脚本和外部 API 客户端仍可使用 `Authorization: Bearer <token>`。前端不从 localStorage 读取访问令牌。
 
 ## 认证与用户
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| POST | `/auth/login` | 登录、签发 JWT；启用 TOTP 时改为返回 5 分钟有效的 `challenge_token` |
+| POST | `/auth/login` | 登录、签发 JWT 并设置 HttpOnly Cookie；启用 TOTP 时改为返回 5 分钟有效的 `challenge_token` |
 | POST | `/auth/login/2fa` | 提交 `challenge_token` + 6 位验证码，换取正式 JWT |
 | POST | `/auth/logout` | 撤销当前会话并清除 Cookie |
 | GET | `/auth/me` | 当前用户 |
@@ -55,7 +55,7 @@ QQ 官方机器人 Webhook 回调（免登录态，由 Ed25519 签名保护）�
 
 - `/ai/presets`、`/ai/providers`、`/ai/models`、`/ai/chat`、`/ai/conversations`、`/ai/usage`：Provider/模型/会话/用量。`POST /ai/providers/{id}/sync-models` 拉取供应商模型列表（OpenAI 兼容 `/models`、Anthropic、Gemini、Ollama 各自适配）并把缺失的对话模型补进已配置列表——去重、过滤向量/TTS/语音等非对话模型、上限 100 个，不删除或修改已有模型；供应商保存后管理台会自动触发一次。
 - `/github/repos`、`/github/push-rules`、`/github/push-records`：仓库、规则、记录和重试；仓库 provider 当前支持 GitHub 与 Gitee。
-- `POST /webhook/github/{repo_id}`：GitHub Release Webhook。当前实现对所有环境统一要求 Secret；仓库未配置 Secret 时返回 **409**，配置 Secret 后必须校验 `X-Hub-Signature-256`，签名错误返回 **401**，通过后按 delivery/release 去重。开发/测试若需覆盖无密钥路径，应使用专门测试替身，不应放行真实端点。
+- `POST /webhook/github/{repo_id}`：GitHub Release Webhook。当前实现对所有环境统一要求 Secret；仓库未配置 Secret 时返回 **409**，配置 Secret 后必须校验 `X-Hub-Signature-256`，签名错误返回 **401**，通过后按 delivery/release 去重；应用层请求体上限为 2 MiB，超限返回 **413**。开发/测试若需覆盖无密钥路径，应使用专门测试替身，不应放行真实端点。
 - `/tasks`、`/tasks/records`：任务定义、立即执行、切换和执行记录。
 - `/plugins`：同步、重载、启用状态和账号/群绑定。
 
@@ -83,7 +83,7 @@ QQ 官方机器人 Webhook 回调（免登录态，由 Ed25519 签名保护）�
 
 ## 系统与实时通道
 
-- `/system/health`：健康检查；`/system/stats`、`/system/info`、`/system/settings`、`/system/backups`、`POST /system/backup`。
+- `/system/health`：健康检查；`/system/stats`、`/system/info`、`/system/settings`、`/system/backups`、`POST /system/backup`。备份接口返回生成文件名，不返回服务器绝对路径；SQLite 使用在线备份快照。
 - `/logs`：日志分类、分页和清理。
 - `WS /ws/status`：账号/任务/消息状态；`WS /ws/logs`：日志流；`WS /ws/events`：统一 `type/id/time/data` 事件流，支持 `account_id` 过滤。
 

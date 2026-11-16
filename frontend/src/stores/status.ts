@@ -1,4 +1,4 @@
-import { computed, onScopeDispose } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { useRealtimeSocket, type SocketState } from '../api'
 
@@ -25,6 +25,7 @@ export const useStatusStore = defineStore('status', () => {
   let socket: ReturnType<typeof useRealtimeSocket<StatusPayload>> | null = null
   let consumers = 0
   let stopTimer: ReturnType<typeof setTimeout> | null = null
+  const socketGeneration = ref(0)
 
   function ensure() {
     if (stopTimer) {
@@ -33,14 +34,19 @@ export const useStatusStore = defineStore('status', () => {
     }
     if (socket) return socket
     socket = useRealtimeSocket<StatusPayload>('/ws/status')
+    socketGeneration.value += 1
     socket.reconnect()
     return socket
   }
 
-  const sock = () => ensure()
-
-  const state = computed<SocketState>(() => sock().state.value)
-  const payload = computed<StatusPayload>(() => sock().lastMessage.value ?? EMPTY)
+  const state = computed<SocketState>(() => {
+    socketGeneration.value
+    return socket?.state.value ?? 'closed'
+  })
+  const payload = computed<StatusPayload>(() => {
+    socketGeneration.value
+    return socket?.lastMessage.value ?? EMPTY
+  })
   const online = computed(() => payload.value.online ?? 0)
   const totalRuntime = computed(() => payload.value.total_runtime ?? 0)
   const messagesToday = computed(() => payload.value.messages_today ?? 0)
@@ -72,5 +78,17 @@ export const useStatusStore = defineStore('status', () => {
     ensure().reconnect()
   }
 
-  return { state, payload, online, totalRuntime, messagesToday, accountStates, acquire, reconnect, ensure }
+  /** Immediately stop the shared connection when the authenticated shell closes. */
+  function stop() {
+    consumers = 0
+    if (stopTimer) {
+      clearTimeout(stopTimer)
+      stopTimer = null
+    }
+    socket?.close()
+    socket = null
+    socketGeneration.value += 1
+  }
+
+  return { state, payload, online, totalRuntime, messagesToday, accountStates, acquire, reconnect, stop, ensure }
 })

@@ -24,24 +24,22 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
-  const token = localStorage.getItem('qbot_token')
-  if (!to.meta.public && !token) return { path: '/login', query: { next: to.fullPath } }
-  if (to.path === '/login' && token) return '/'
-  if (!to.meta.permission || to.meta.public || !token) return true
-
+  if (to.meta.public && to.path !== '/login') return true
   try {
-    const response = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
+    const response = await fetch('/api/auth/me', { credentials: 'include' })
     if (response.status === 401) {
-      localStorage.removeItem('qbot_token')
+      if (to.meta.public) return true
       return { path: '/login', query: { next: to.fullPath } }
     }
-    if (!response.ok) return { path: '/', query: { forbidden: '1' } }
+    if (!response.ok) return to.meta.public ? true : { path: '/', query: { forbidden: '1' } }
+    if (to.path === '/login') return '/'
+    if (!to.meta.permission) return true
     const user = await response.json()
     const permissions: string[] = user.permissions || []
     if (permissions.includes('*') || permissions.includes(String(to.meta.permission))) return true
     return { path: '/', query: { forbidden: '1' } }
   } catch {
-    return { path: '/', query: { forbidden: '1' } }
+    return to.meta.public ? true : { path: '/login', query: { next: to.fullPath } }
   }
 })
 export default router

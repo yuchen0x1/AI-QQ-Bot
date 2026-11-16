@@ -21,4 +21,7 @@ COPY plugins ./plugins
 RUN useradd --create-home --uid 10001 qbot && mkdir -p /data /backups && chown -R qbot:qbot /app /data /backups
 USER qbot
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# Uvicorn 0.30 matches literal peer IPs here rather than CIDR ranges.  Keep
+# its scheme/client rewriting limited to loopback; the application-level
+# client IP parser separately validates the Compose proxy CIDR list.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1,::1"]

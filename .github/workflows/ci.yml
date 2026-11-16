@@ -24,6 +24,8 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements*.txt
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pip check
+      - run: python -m compileall -q app tests migrations
       - run: python -m pytest -q
       - run: python -m ruff check app tests
 
@@ -49,5 +51,21 @@ jobs:
     needs: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        run: docker compose --env-file .env.example config --no-env-resolution --quiet
+      - name: Check whitespace errors
+        run: git diff --check
       - run: docker build --tag qbot-backend:ci backend
       - run: docker build --tag qbot-frontend:ci frontend
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high

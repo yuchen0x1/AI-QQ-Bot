@@ -4,10 +4,11 @@ from __future__ import annotations
 
 
 import httpx
+from datetime import datetime, timezone
 from sqlalchemy import select
 
 from app.adapters.base import AdapterEvent
-from app.models import Account, BotRequest, Group, Message
+from app.models import Account, BotRequest, Group, GroupMember, Message
 from app.services.account_manager import account_manager
 from app.services.bot_engine import engine
 
@@ -71,6 +72,11 @@ async def test_banned_word_triggers_mute(
     )
     assert blocked is not None and blocked.blocked is True
     assert "违禁词" in (blocked.block_reason or "")
+    member = await db.scalar(select(GroupMember).where(GroupMember.group_id == group["id"], GroupMember.user_id == 30002))
+    assert member is not None and member.muted_until is not None
+    muted_until = member.muted_until.replace(tzinfo=timezone.utc) if member.muted_until.tzinfo is None else member.muted_until
+    remaining = (muted_until - datetime.now(timezone.utc)).total_seconds()
+    assert 90 <= remaining <= 150
 
 
 async def test_member_cannot_mute(client: httpx.AsyncClient, admin_headers: dict[str, str], mock_account: dict, db):

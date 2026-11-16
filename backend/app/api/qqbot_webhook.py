@@ -65,6 +65,24 @@ async def _trace_context(request: Request, **extra: Any) -> dict[str, Any]:
     return context
 
 
+async def _read_body_limited(request: Request) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_BODY_BYTES:
+                raise ValueError("回调请求体过大")
+        except ValueError as exc:
+            raise ValueError("回调请求体过大") from exc
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_BODY_BYTES:
+            raise ValueError("回调请求体过大")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def _resolve_account(
     db: AsyncSession, path_app_id: str, header_app_id: str
 ) -> tuple[Account | None, str]:
@@ -97,9 +115,10 @@ async def _resolve_account(
 
 
 async def handle_callback(request: Request, app_id: str | None, db: AsyncSession) -> JSONResponse:
-    body = await request.body()
-    if len(body) > MAX_BODY_BYTES:
-        return _error(413, "回调请求体过大")
+    try:
+        body = await _read_body_limited(request)
+    except ValueError as exc:
+        return _error(413, str(exc))
     path_app_id = (app_id or "").strip()
     header_app_id = (request.headers.get("X-Bot-Appid") or "").strip()
     resolved_app_id = path_app_id or header_app_id

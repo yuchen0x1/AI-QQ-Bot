@@ -3,7 +3,10 @@
   <slot name="panel" />
   <section class="surface resource-surface">
     <div class="resource-toolbar"><div class="filter-row"><el-input v-if="config.keyword" v-model="filters.keyword" clearable :placeholder="config.keyword" :prefix-icon="Search" @keyup.enter="load(1)" @clear="load(1)" /><el-select v-for="filter in config.filters || []" :key="filter.key" v-model="filters[filter.key]" clearable :placeholder="filter.label" @change="load(1)"><el-option v-for="option in filter.options" :key="option.value" :label="option.label" :value="option.value" /></el-select><el-select v-if="config.statusFilter" v-model="filters.status" clearable placeholder="状态" @change="load(1)"><el-option v-for="o in config.statusFilter" :key="o.value" :label="o.label" :value="o.value" /></el-select><el-button :icon="Search" @click="load(1)">查询</el-button></div><el-button text :icon="Refresh" @click="load()">刷新</el-button></div>
-    <el-table v-loading="loading" :data="rows" row-key="id" stripe empty-text="暂无数据" style="width:100%">
+    <el-alert v-if="loadError" class="resource-error" type="error" show-icon :closable="false" title="数据加载失败">
+      <template #default><span>{{ loadError }}</span><el-button link type="danger" @click="load()">重试</el-button></template>
+    </el-alert>
+    <el-table v-loading="loading" :data="rows" row-key="id" stripe :empty-text="loadError ? '请重试加载' : '暂无数据'" style="width:100%">
       <el-table-column v-for="col in config.columns" :key="col.key" :prop="col.key" :label="col.label" :min-width="col.width || 120" :show-overflow-tooltip="col.overflow !== false">
         <template #default="scope"><template v-if="col.type === 'status'"><el-tag :type="tagType(getValue(scope.row,col.key), col)" effect="dark" round>{{ display(getValue(scope.row,col.key), col) }}</el-tag></template><template v-else-if="col.type === 'bool'"><el-tag :type="getValue(scope.row,col.key) ? 'success' : 'info'" effect="dark" size="small">{{ getValue(scope.row,col.key) ? '启用' : '关闭' }}</el-tag></template><template v-else-if="col.type === 'date'">{{ formatDate(getValue(scope.row,col.key)) }}</template><template v-else-if="col.type === 'link'"><a class="table-link" :href="getValue(scope.row,col.key)" target="_blank" rel="noreferrer">{{ getValue(scope.row,col.key) || '—' }}</a></template><template v-else>{{ display(getValue(scope.row,col.key), col) }}</template></template>
       </el-table-column>
@@ -23,14 +26,15 @@ import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { api } from '../api'
 const props = defineProps<{ config: any }>()
 const config = computed(() => props.config)
-const rows = ref<any[]>([]), loading = ref(false), saving = ref(false), dialog = ref(false), editing = ref(false), formRef = ref(), activeRow = ref<any>(), page = ref(1), pageSize = ref(20), total = ref(0)
+const rows = ref<any[]>([]), loading = ref(false), saving = ref(false), dialog = ref(false), editing = ref(false), formRef = ref(), activeRow = ref<any>(), page = ref(1), pageSize = ref(20), total = ref(0), loadError = ref('')
 const paged = computed(() => config.value.paged !== false)
 const activeFields = computed(() => { const fields = editing.value ? (config.value.editFields || config.value.createFields || []) : (config.value.createFields || []); return (fields || []).filter((f: any) => !f.showWhen || f.showWhen(form)) })
 const filters = reactive<Record<string, any>>(Object.fromEntries([...(config.value.filters || []).map((f: any) => [f.key, '']), ...(config.value.keyword ? [['keyword', '']] : [])]))
 const form = reactive<Record<string, any>>({})
 const rules = computed(() => Object.fromEntries((activeFields.value || []).filter((x: any) => x.required).map((x: any) => [x.key, [{ required: true, message: `${x.label}不能为空`, trigger: 'blur' }]])) as any)
 function params() { const p: Record<string, any> = {}; if (paged.value) { p.page = page.value; p.page_size = pageSize.value }; for (const [k,v] of Object.entries(filters)) if (v !== undefined && v !== '' && v !== null) { const filter = config.value.filters?.find((x: any) => x.key === k); p[filter?.param || k] = v }; if (config.value.keyword && filters.keyword) p.keyword = filters.keyword; return p }
-async function load(target?: number) { if (target) page.value = target; loading.value = true; try { const { data } = await api.get(config.value.endpoint, { params: params() }); const payload = data?.items ? data : data?.data?.items ? data.data : data; rows.value = Array.isArray(payload) ? payload : (payload.items || []); total.value = Array.isArray(payload) ? rows.value.length : (payload.total ?? rows.value.length) } finally { loading.value = false } }
+function errorText(err: any) { const raw = err?.response?.data?.detail; return typeof raw === 'string' && raw ? raw : '请求失败，请检查连接后重试' }
+async function load(target?: number) { if (target) page.value = target; loading.value = true; loadError.value = ''; try { const { data } = await api.get(config.value.endpoint, { params: params() }); const payload = data?.items ? data : data?.data?.items ? data.data : data; rows.value = Array.isArray(payload) ? payload : (payload.items || []); total.value = Array.isArray(payload) ? rows.value.length : (payload.total ?? rows.value.length) } catch (err) { loadError.value = errorText(err) } finally { loading.value = false } }
 function resetForm(row?: any) { Object.keys(form).forEach(k => delete form[k]); const fields = row ? (config.value.editFields || config.value.createFields || []) : (config.value.createFields || []); for (const field of fields) { let value = row?.[field.payloadKey || field.key]; if (value === undefined || value === null) value = field.default ?? (field.type === 'switch' ? false : field.type === 'number' ? 0 : ''); if (field.type === 'json' && typeof value !== 'string') value = JSON.stringify(value, null, 2); form[field.key] = value } }
 function openCreate() { if (config.value.onCreate) { config.value.onCreate(); return }; openRawCreate() }
 function runExtraCreate() { config.value.onExtraCreate?.() }
@@ -57,6 +61,7 @@ defineExpose({ openCreate, load, rows })
   border: 1px solid rgba(56, 75, 110, 0.35);
   box-shadow: 0 12px 35px rgba(0, 0, 0, 0.4);
 }
+.resource-error { margin: 14px 20px 0; }
 .resource-toolbar {
   padding: 16px 20px;
   display: flex;

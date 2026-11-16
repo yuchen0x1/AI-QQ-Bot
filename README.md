@@ -8,11 +8,14 @@
 
 ## 最新更新
 
-### v1.4.0（2026-11-14）
+### v1.4.8（2026-11-16）
 
-- GitHub 仓库动态与版本发布通知支持 QQ 官方 Markdown 卡片：深色卡片呈现提交内容、变化文件、行数统计与更新要点，底部附「仓库主页 / 查看变更 / 发布页」跳转按钮。
-- 推送规则「Markdown 卡片」默认开启、可按规则关闭；机器人未取得官方 Markdown 权限或发送失败时自动降级纯文本，推送永不中断。
-- 新增迁移 0012，升级自动执行；旧推送记录按纯文本投递，历史数据完整保留。
+- 管理台浏览器认证改用后端 HttpOnly Cookie；Bearer 仍保留给 API 客户端，浏览器不再把长效 JWT 写入 localStorage。
+- 修复推送规则目标群字段错配，增加资源页/仪表盘失败重试；修复宣传站 favicon 和移动端导航入口。
+- Gitee Token 不再进入 URL；SQLite 备份改用在线备份和原子替换；GitHub/QQ Webhook 增加 2 MiB 应用层 body 上限。
+- 自动禁言记录真实到期时间，原生更新器可安全处理损坏状态；Docker forwarded header 信任范围收窄。
+- CI/release 增加依赖检查、编译、Compose、diff 和 SHA-256 自检。
+- 50 项对标升级计划与实际状态见 [竞品分析](COMPETITOR_ANALYSIS.md)、[升级路线](UPGRADE_ROADMAP.md)、[升级报告](UPGRADE_REPORT.md) 和 [项目审计](PROJECT_AUDIT.md)。升级后如提示未登录，请重新登录一次。
 
 完整记录见 [更新历史](docs/releases/release-notes.md)。
 
@@ -24,7 +27,7 @@
 - 全部仓库动态群通知：Token 一次连接、自动发现新仓库、多个通知群独立启停、群号显示、群内一次性口令绑定；支持提交、PR、Issue、评论、Release 等事件，以及服务器自动配置实时 Webhook。操作和部署见 [全部仓库通知指南](docs/GITHUB_NOTIFICATIONS.md)。
 
 - FastAPI + SQLAlchemy 2 异步 ORM；PostgreSQL 生产库，SQLite 便于本地测试；Alembic 迁移入口。
-- JWT 登录、密码哈希、登录失败锁定、RBAC 权限、敏感配置加密、操作审计和请求限流。
+- JWT 登录、HttpOnly Cookie 会话（Bearer API 兼容）、密码哈希、登录失败锁定、RBAC 权限、敏感配置加密、操作审计和请求限流。
 - TOTP 两步验证（二维码绑定、验证码启用/关闭、challenge 防重放）与数据库登录会话管理：查看活跃设备、撤销单个/其它会话，改密、重置密码、关闭 2FA 时自动作废旧令牌，API 与 WebSocket 均校验会话有效性。
 - 官方机器人多账号运行时：AppAccessToken、Gateway WebSocket / Webhook、Identify / Heartbeat / Resume、回调地址验证、Ed25519 验签、被动与主动消息、OpenID 映射、连接状态与退避重连。
 - 群聊配置、命令权限、消息统计、历史申请记录与审计；具体操作按官方适配器已实现的能力开放。

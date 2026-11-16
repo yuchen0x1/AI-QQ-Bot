@@ -254,14 +254,30 @@ class Updater:
         self.pointer = self.state_dir / "current.json"
         self.gate = Path(config.get("gate_dir", config["run_dir"])) / "maintenance"
         self.lock = threading.RLock()
+        # A malformed pointer/job file must not crash the supervisor or permit a
+        # new upgrade to overwrite an unknown in-flight state.  Keep the state
+        # visible to the authenticated status endpoint until an operator repairs it.
+        self.state_error: str | None = None
         self.opener = build_opener(GithubRedirects())
         self.mirrors = [m for m in (config.get("download_mirrors") or []) if valid_mirror(m)]
 
     def current_job(self) -> dict | None:
         if not self.pointer.exists():
+            self.state_error = None
             return None
-        job_id = str(UUID(json.loads(self.pointer.read_text())["id"]))
-        return json.loads((self.jobs / (job_id + ".json")).read_text(encoding="utf-8"))
+        try:
+            pointer = json.loads(self.pointer.read_text(encoding="utf-8"))
+            if not isinstance(pointer, dict) or not isinstance(pointer.get("id"), str):
+                raise TypeError("升级指针格式无效")
+            job_id = str(UUID(pointer["id"]))
+            job = json.loads((self.jobs / (job_id + ".json")).read_text(encoding="utf-8"))
+            if not isinstance(job, dict) or job.get("id") != job_id:
+                raise ValueError("升级任务格式无效")
+        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            self.state_error = "升级状态文件损坏，请检查升级记录"
+            return None
+        self.state_error = None
+        return job
 
     def public_state(self) -> dict:
         with self.lock:
@@ -278,7 +294,10 @@ class Updater:
                 "updated_at",
                 "error",
             }
-            return {"mode": "native_systemd", "job": {k: v for k, v in job.items() if k in keys} if job else None}
+            result = {"mode": "native_systemd", "job": {k: v for k, v in job.items() if k in keys} if job else None}
+            if self.state_error:
+                result["error"] = self.state_error
+            return result
 
     def save(self, job: dict, phase: str, progress: int, **values) -> None:
         with self.lock:
@@ -295,6 +314,8 @@ class Updater:
                     raise ValueError("同一个请求不能用于不同版本")
                 return self.public_state()
             active = self.current_job()
+            if self.state_error:
+                raise ValueError(self.state_error)
             if active and active["status"] in ACTIVE:
                 raise ValueError("已有升级任务正在进行，请勿重复点击")
             if self.gate.exists() or active and active["status"] == "attention":

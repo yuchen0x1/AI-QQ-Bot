@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 2026-11-16 — 项目演进批次（v1.4.8）
+
+- 安全：管理台浏览器改用 HttpOnly Cookie；Gitee Token 不再进入 URL；Docker forwarded header 信任收窄；Webhook body 增加 2 MiB 应用层上限。
+- 稳定性：SQLite 使用 online backup + 原子替换；备份 API 不再返回绝对服务器路径；自动禁言保存真实到期时间；更新器损坏状态可报告并阻止新安装。
+- 前端：修复推送规则 `qq_group` payload 错配；资源页和仪表盘增加加载失败/重试；宣传站修复 favicon 和移动导航。
+- 工程化：CI/release 增加 `pip check`、`compileall`、Compose 校验、PR 依赖审查、diff 检查和发布校验和自检。
+- 文档：新增 `PROJECT_AUDIT.md`、`COMPETITOR_ANALYSIS.md`、`UPGRADE_ROADMAP.md`、`UPGRADE_REPORT.md`，记录 15 个开源项目研究和 50 项升级清单。
+
+验证：后端 pytest 230 passed、1 skipped；Ruff、compileall、前端生产构建和 Compose 配置校验通过。Docker 实际构建因本机 Docker Desktop Linux daemon 不可用而未执行。
+
 ## 2026-11-15 — 陈旧动态防迟到播报（v1.4.7）
 
 - **根因**：GitHub 公共事件流会迟到补发旧事件（生产案例：Family-Genealogy 仓库 11-11~11-13 的推送在 11-15 00:03 被播报，且部分提交已不在任何分支），升级重启后重新轮询更容易触发。

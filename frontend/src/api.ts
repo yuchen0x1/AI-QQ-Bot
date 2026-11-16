@@ -5,19 +5,15 @@ import type { Ref, ShallowRef } from 'vue'
 
 // 30 秒足够覆盖普通 CRUD；AI 端点走模型，超时上限可配到 600 秒，
 // 调用方用 `{ timeout: AI_TIMEOUT }` 单独覆盖。
-export const api = axios.create({ baseURL: '/api', timeout: 30000 })
+// 管理台认证使用后端设置的 HttpOnly qbot_token Cookie；Bearer 仍由后端保留给
+// API 客户端，但浏览器端不再把长效访问令牌放进可被脚本读取的 localStorage。
+export const api = axios.create({ baseURL: '/api', timeout: 30000, withCredentials: true })
 
 /** AI 相关请求的超时：模型侧 timeout 上限 600s，再留 30s 余量。 */
 export const AI_TIMEOUT = 630_000
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('qbot_token')
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
-})
 api.interceptors.response.use((response) => response, (error) => {
   const status = error?.response?.status
   if (status === 401 && !location.pathname.startsWith('/login')) {
-    localStorage.removeItem('qbot_token')
     location.href = '/login'
   } else if (status !== 401 && !(localStorage.getItem('qbot_upgrade_pending') && Date.now() - Number(localStorage.getItem('qbot_upgrade_pending_since') || 0) < 1200000 && (!status || status === 502 || status === 503))) {
     const raw = error?.response?.data?.detail
@@ -73,7 +69,6 @@ export function useRealtimeSocket<T = Record<string, unknown>>(path: string, opt
     reconnectTimer = setTimeout(() => { reconnectTimer = undefined; connect() }, delay)
   }
   const connect = async () => {
-    if (!localStorage.getItem('qbot_token')) { state.value = 'closed'; return }
     if (stopped || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return
     clearTimers()
     state.value = 'connecting'

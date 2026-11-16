@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -494,7 +494,10 @@ class BotEngine:
         try:
             if verdict.action == "mute" and adapter.supports("set_group_ban"):
                 await adapter.set_group_ban(group.group_number, member.user_id, verdict.duration)
-                member.muted_until = datetime.now(timezone.utc).replace(microsecond=0)
+                member.muted_until = (
+                    datetime.now(timezone.utc).replace(microsecond=0)
+                    + timedelta(seconds=max(0, int(verdict.duration or 0)))
+                )
                 action_taken = "mute"
             elif verdict.action == "kick" and adapter.supports("set_group_kick"):
                 await adapter.set_group_kick(group.group_number, member.user_id)

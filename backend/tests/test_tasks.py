@@ -113,9 +113,11 @@ async def test_backup_database(client: httpx.AsyncClient, admin_headers: dict):
     body = resp.json()
     assert body["ok"] is True
     assert body["path"].endswith(".db")
+    assert "/" not in body["path"] and "\\" not in body["path"]
     listing = await client.get("/api/system/backups", headers=admin_headers)
     assert listing.status_code == 200
-    assert any(item["name"] == body["path"].split("\\")[-1].split("/")[-1] for item in listing.json())
+    assert any(item["name"] == body["path"] for item in listing.json())
+    assert all("/" not in item["path"] and "\\" not in item["path"] for item in listing.json())
 
 
 async def test_system_settings_and_logs(client: httpx.AsyncClient, admin_headers: dict):

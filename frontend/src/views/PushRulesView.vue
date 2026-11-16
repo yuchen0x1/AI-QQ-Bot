@@ -12,8 +12,8 @@ const config = reactive<any>({
   createLabel:'新增规则',
   createFields:[
     {key:'repository_id',label:'监控仓库',type:'select',required:true,options:[]},
-    {key:'account_id',label:'发送 QQ 账号',type:'select',required:true,options:[],onChange:(v:number)=>loadGroupOptions(v)},
-    {key:'qq_group_display',label:'目标 QQ 群',type:'select',required:true,options:[],placeholder:'请先选择发送账号，再选择群聊'},
+    {key:'account_id',label:'发送 QQ 账号',type:'select',required:true,options:[],onChange:(v:number, form:any)=>loadGroupOptions(v, form)},
+    {key:'qq_group',label:'目标 QQ 群',type:'select',required:true,options:[],placeholder:'请先选择发送账号，再选择群聊'},
     {key:'only_stable',label:'仅正式版本',type:'switch',default:true},
     {key:'include_changelog',label:'附带更新日志',type:'switch',default:true},
     {key:'include_downloads',label:'附带下载地址',type:'switch',default:true},
@@ -22,8 +22,8 @@ const config = reactive<any>({
     {key:'enabled',label:'启用此规则',type:'switch',default:true},
     {key:'template',label:'消息模板（可选）',type:'textarea',placeholder:'支持 {repo_name}、{version}、{changelog}、{release_url}、{downloads} 等字段'}],
   editFields:[
-    {key:'account_id',label:'发送 QQ 账号',type:'select',options:[],onChange:(v:number)=>loadGroupOptions(v)},
-    {key:'qq_group_display',label:'目标 QQ 群',type:'select',options:[],placeholder:'请先选择发送账号，再选择群聊'},
+    {key:'account_id',label:'发送 QQ 账号',type:'select',options:[],onChange:(v:number, form:any)=>loadGroupOptions(v, form)},
+    {key:'qq_group',label:'目标 QQ 群',type:'select',options:[],placeholder:'请先选择发送账号，再选择群聊'},
     {key:'only_stable',label:'仅正式版本',type:'switch'},
     {key:'include_changelog',label:'附带更新日志',type:'switch'},
     {key:'include_downloads',label:'附带下载地址',type:'switch'},
@@ -37,9 +37,11 @@ const config = reactive<any>({
 
 function groupLabel(g: any) { return `${g.display_name || '未标注群号'}（${g.display_number || '群号待标注'}）` }
 
-async function loadGroupOptions(accountId?: number) {
+async function loadGroupOptions(accountId?: number, form?: Record<string, any>) {
   const createField = config.createFields.find((f: any) => f.key === 'qq_group')
   const editField = config.editFields.find((f: any) => f.key === 'qq_group')
+  // Changing the sending account invalidates the previously selected group.
+  if (form) form.qq_group = null
   try {
     if (!accountId) { createField.options = []; editField.options = []; return }
     const { data } = await api.get('/groups', { params: { account_id: accountId, page: 1, page_size: 200 } })

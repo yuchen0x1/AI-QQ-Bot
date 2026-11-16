@@ -1,5 +1,6 @@
 <template>
   <div class="page-heading"><div><div class="eyebrow">OVERVIEW <span class="realtime-badge"><i :class="`socket-led ${realtime.state.value}`"></i>{{ realtime.state.value === 'open' ? 'LIVE' : realtime.state.value.toUpperCase() }}</span></div><h1>仪表盘</h1><p>实时掌握机器人平台运行概况 · {{ realtime.lastMessage.value?.time ? formatTime(realtime.lastMessage.value.time as string) : '等待状态同步' }}</p></div><div class="heading-actions"><el-button v-if="realtime.state.value !== 'open'" text type="primary" @click="realtime.reconnect">重新连接</el-button><el-button :icon="Refresh" @click="load()">刷新数据</el-button></div></div>
+  <el-alert v-if="loadError" type="error" show-icon :closable="false" class="dashboard-error" title="仪表盘数据加载失败"><template #default><span>{{ loadError }}</span><el-button link type="danger" @click="load()">重试</el-button></template></el-alert>
   <div v-loading="loading">
     <div class="metric-grid">
       <div class="metric-card" v-for="m in metrics" :key="m.label"><div class="metric-top"><span>{{ m.label }}</span><div class="metric-icon" :class="m.tone"><el-icon><component :is="m.icon" /></el-icon></div></div><div class="metric-value">{{ m.value }}</div><div class="metric-foot"><span :class="m.footClass">{{ m.foot }}</span><span>{{ m.hint }}</span></div></div>
@@ -37,7 +38,7 @@ const AsyncChart = defineAsyncComponent(async () => {
   use([CanvasRenderer, LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent])
   return VChart
 })
-const loading = ref(false), data = ref<any>(), system = ref<any>()
+const loading = ref(false), data = ref<any>(), system = ref<any>(), loadError = ref('')
 const status = useStatusStore()
 const { state: socketState, payload: socketPayload } = storeToRefs(status)
 const realtime = { state: socketState, lastMessage: socketPayload, reconnect: status.reconnect }
@@ -154,7 +155,7 @@ function accountMeta(account: any) {
 }
 function formatTime(value: string) { return value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '' }
 let refreshingData = false
-async function load(silent = false) { if (refreshingData) return; refreshingData = true; if (!silent) loading.value = true; try { const [d, s] = await Promise.all([api.get('/dashboard'), api.get('/system/stats')]); data.value = d.data; system.value = s.data } finally { refreshingData = false; loading.value = false } }
+async function load(silent = false) { if (refreshingData) return; refreshingData = true; if (!silent) loading.value = true; if (!silent) loadError.value = ''; try { const [d, s] = await Promise.all([api.get('/dashboard'), api.get('/system/stats')]); data.value = d.data; system.value = s.data } catch (err: any) { if (!silent) { const raw = err?.response?.data?.detail; loadError.value = typeof raw === 'string' && raw ? raw : '请求失败，请检查连接后重试' } } finally { refreshingData = false; loading.value = false } }
 onMounted(() => load())
 useAutoRefresh(() => load(true))
 </script>

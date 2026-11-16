@@ -31,7 +31,7 @@ let challengeToken = ''
 const rules = { username: [{ required: true, message: '请输入用户名', trigger: 'blur' }], password: [{ required: true, message: '请输入密码', trigger: 'blur' }] }
 const otpRules = { code: [{ required: true, len: 6, message: '请输入 6 位验证码', trigger: 'blur' }] }
 function finishLogin(data: any) {
-  localStorage.setItem('qbot_token', data.access_token)
+  // 登录响应中的 access_token 仍供 API 客户端使用；浏览器认证由 HttpOnly Cookie 完成。
   ElMessage.success('登录成功')
   router.replace(String(route.query.next || '/'))
 }
