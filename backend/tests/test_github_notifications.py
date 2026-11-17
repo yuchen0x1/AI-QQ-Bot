@@ -308,6 +308,35 @@ async def test_release_published_and_released_deliveries_notify_once(client, adm
     assert len(records) == 1
 
 
+async def test_release_edited_after_publish_is_ignored(client, admin_headers, db, mock_account, notification_transport):
+    """发布流程上传资产/改说明会触发 edited：既不能再发一条版本通知，也不能落到普通动态。
+
+    修复前每个群会额外收到 2~4 条「xxx 编辑 版本发布：…」。
+    """
+    repo, deliver = await _webhook_repo(client, admin_headers, db, mock_account)
+    release = {"tag_name": "v9.9.10", "name": "v9.9.10", "body": "- 新增安装包", "draft": False, "prerelease": False,
+               "html_url": "https://github.com/notifier/project-one/releases/tag/v9.9.10",
+               "published_at": datetime.now(timezone.utc).isoformat(), "assets": []}
+    published = await deliver("release", {"action": "published", "release": release,
+                                          "repository": {"full_name": repo.full_name}}, "rel-edit-1")
+    assert published.status_code == 200
+
+    for index in range(3):  # GitHub 连续多次 edited
+        edited = await deliver("release", {"action": "edited", "release": {**release, "body": f"- 资产更新 {index}"},
+                                           "repository": {"full_name": repo.full_name}}, f"rel-edit-{index + 2}")
+        assert edited.status_code == 200
+        assert edited.json().get("ignored") is True
+
+    records = list(await db.scalars(select(PushRecord).where(PushRecord.repository_id == repo.id)))
+    assert len(records) == 1
+    assert records[0].release_tag == "v9.9.10"
+    # 该 tag 只应留下一条 release 事件（published），edited 不入库也不通知。
+    tag_events = [event for event in await db.scalars(select(GithubEvent).where(
+        GithubEvent.repository_id == repo.id, GithubEvent.event_type == "release"))
+        if (event.payload or {}).get("tag") == "v9.9.10"]
+    assert [(event.action) for event in tag_events] == ["published"]
+
+
 async def test_one_time_group_binding_is_account_specific(client, admin_headers, db, mock_account, notification_transport):
     await configure(client, admin_headers, mock_account)
     response = await client.post("/api/github/automation/binding-code", headers=admin_headers)

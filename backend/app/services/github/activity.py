@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -197,20 +198,30 @@ async def ingest_activity(db: AsyncSession, repo: GithubRepository, event_type: 
 async def dispatch_activity(db: AsyncSession, repo: GithubRepository, event: GithubEvent) -> list[PushRecord]:
     from app.services.account_manager import account_manager
 
-    rules = list(await db.scalars(select(PushRule).where(PushRule.repository_id == repo.id, PushRule.enabled.is_(True))))
+    rule_rows = list(await db.scalars(select(PushRule).where(PushRule.repository_id == repo.id, PushRule.enabled.is_(True))))
+    # 判据快照成普通元组：并发回滚会让会话内所有 ORM 实例过期，之后再读
+    # rule.event_types 会触发异步上下文里的懒加载并抛出 MissingGreenlet（接口 500）。
+    snapshot = [(row.id, tuple(row.event_types or ["release"])) for row in rule_rows]
     records = []
-    for rule in rules:
-        if event.event_type not in (rule.event_types or ["release"]):
+    for rule_id, event_types in snapshot:
+        if event.event_type not in event_types:
             continue
-        if await db.scalar(select(PushRecord.id).where(PushRecord.rule_id == rule.id, PushRecord.event_id == event.id)):
+        rule = await db.get(PushRule, rule_id, populate_existing=True)
+        if rule is None:
             continue
-        record = PushRecord(repository_id=repo.id, rule_id=rule.id, event_id=event.id, account_id=rule.account_id, qq_group=rule.qq_group,
+        if await db.scalar(select(PushRecord.id).where(PushRecord.rule_id == rule_id, PushRecord.event_id == event.id)):
+            continue
+        record = PushRecord(repository_id=repo.id, rule_id=rule_id, event_id=event.id, account_id=rule.account_id, qq_group=rule.qq_group,
                             release_tag=str(event.payload.get("title") or event.event_type)[:128], content=event.payload.get("content") or "", status="pending")
         db.add(record)
         try:
             await db.commit()
         except IntegrityError:
             await db.rollback()
+            # 回滚后 repo / event 也会过期，下一轮读取前显式重新加载。
+            with contextlib.suppress(Exception):
+                await db.refresh(repo)
+                await db.refresh(event)
             continue
         try:
             if not account_manager.is_online(rule.account_id):

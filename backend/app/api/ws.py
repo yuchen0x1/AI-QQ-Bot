@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, Request, WebSocket, WebSocketDisconnect
@@ -27,6 +29,7 @@ from app.services.account_manager import account_manager
 from app.services.scheduler import scheduler_service
 
 router = APIRouter()
+logger = logging.getLogger("qbot.ws")
 
 # WebSocket 票据的有效期（秒）。只够完成一次握手，不用于长期鉴权。
 WS_TICKET_TTL_SECONDS = 60
@@ -151,14 +154,20 @@ async def ws_events(
             except asyncio.TimeoutError:
                 tick += 1
                 # 每 4 次心跳（约 100 秒）复核一次会话，撤销登录后必须尽快断开。
-                if tick % 4 == 0 and not await _session_alive(username, session_jti):
-                    await websocket.close(code=4401, reason="登录会话已失效")
-                    return
+                if tick % 4 == 0:
+                    try:
+                        alive = await _session_alive(username, session_jti)
+                    except Exception:  # noqa: BLE001
+                        logger.warning("ws/events 会话复核失败，保持连接 user=%s", username, exc_info=True)
+                        alive = True
+                    if not alive:
+                        await websocket.close(code=4401, reason="登录会话已失效")
+                        return
                 await websocket.send_json({"type": "ping", "id": None, "time": datetime.now(timezone.utc).isoformat(), "data": {}})
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001
-        pass
+        logger.exception("ws/events 事件流异常关闭 user=%s", username)
     finally:
         await event_hub.unsubscribe(queue)
         with contextlib.suppress(Exception):
@@ -183,14 +192,20 @@ async def ws_logs(websocket: WebSocket, ticket: str | None = Query(default=None)
                 await websocket.send_json({"type": "log", **item})
             except asyncio.TimeoutError:
                 tick += 1
-                if tick % 4 == 0 and not await _session_alive(username, session_jti):
-                    await websocket.close(code=4401, reason="登录会话已失效")
-                    return
+                if tick % 4 == 0:
+                    try:
+                        alive = await _session_alive(username, session_jti)
+                    except Exception:  # noqa: BLE001
+                        logger.warning("ws/logs 会话复核失败，保持连接 user=%s", username, exc_info=True)
+                        alive = True
+                    if not alive:
+                        await websocket.close(code=4401, reason="登录会话已失效")
+                        return
                 await websocket.send_json({"type": "ping", "time": datetime.now(timezone.utc).isoformat()})
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001
-        pass
+        logger.exception("ws/logs 日志流异常关闭 user=%s", username)
     finally:
         await hub.unsubscribe(queue)
         with contextlib.suppress(Exception):
@@ -207,18 +222,42 @@ async def ws_status(websocket: WebSocket, ticket: str | None = Query(default=Non
     credential = ticket or token
     session_jti, username = _session_ref(credential)
     tick = 0
+    messages = 0
+    db_errors = 0
+    started = time.monotonic()
+    close_code: int | None = None
+    logger.info("ws/status 已连接 user=%s", username)
     try:
         while True:
             tick += 1
             # 状态流每 5 秒一轮，每 12 轮（约 60 秒）复核一次会话。
-            if tick % 12 == 0 and not await _session_alive(username, session_jti):
-                await websocket.close(code=4401, reason="登录会话已失效")
-                return
+            if tick % 12 == 0:
+                try:
+                    alive = await _session_alive(username, session_jti)
+                except Exception:  # noqa: BLE001
+                    # 复核失败（数据库抖动）不等于会话失效，保持连接、下一轮再试。
+                    logger.warning("ws/status 会话复核失败，保持连接 user=%s", username, exc_info=True)
+                    alive = True
+                if not alive:
+                    close_code = 4401
+                    await websocket.close(code=4401, reason="登录会话已失效")
+                    return
             today = day_start()
-            async with SessionLocal() as db:
-                messages = await db.scalar(
-                    select(func.count()).select_from(Message).where(Message.created_at >= today)
-                ) or 0
+            try:
+                async with SessionLocal() as db:
+                    messages = await db.scalar(
+                        select(func.count()).select_from(Message).where(Message.created_at >= today)
+                    ) or 0
+            except Exception:  # noqa: BLE001
+                # 单次统计失败（SQLite 写入高峰的锁等待）不再掐断整条实时状态流，
+                # 沿用上一次计数，5 秒后重试；否则前端会莫名显示一次「连接已断开」。
+                db_errors += 1
+                if db_errors == 1 or db_errors % 60 == 0:
+                    logger.warning(
+                        "ws/status 统计今日消息失败，沿用上一次结果（连续 %s 次）", db_errors, exc_info=db_errors == 1,
+                    )
+            else:
+                db_errors = 0
             states = account_manager.all_states()
             status_data = {
                 "online": sum(1 for s in states if s.state == "online"),
@@ -236,7 +275,13 @@ async def ws_status(websocket: WebSocket, ticket: str | None = Query(default=Non
             payload.update(status_data)
             await websocket.send_text(json.dumps(payload, ensure_ascii=False))
             await asyncio.sleep(5)
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        close_code = getattr(exc, "code", None)
     except Exception:  # noqa: BLE001
-        pass
+        # 以前是静默 pass，前端只看到「连接已断开」而服务端毫无记录，无法定位。
+        logger.exception("ws/status 推送循环异常，连接关闭 user=%s", username)
+    finally:
+        logger.info(
+            "ws/status 连接结束 user=%s 关闭码=%s 时长=%.0fs",
+            username, close_code if close_code is not None else "客户端断开", time.monotonic() - started,
+        )

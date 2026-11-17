@@ -513,3 +513,19 @@ async def test_gateway_connect_identify_heartbeat_and_resume(client, admin_heade
         await adapter.disconnect()
     finally:
         await client.delete(f"/api/accounts/{account['id']}", headers=admin_headers)
+
+
+async def test_gateway_reconnect_marked_as_planned() -> None:
+    """op=7 是官方网关的常规会话轮换（约每小时一次），必须标记为计划内重连。
+
+    否则账号会闪一次红色「异常」，系统日志每小时写一条 ERROR「协议端断开连接」，
+    真正的网络故障反而被淹没。
+    """
+    adapter = make_adapter(9001)
+    adapter._ws = None
+    await adapter._handle_payload({"op": qq_official.OP_RECONNECT})
+    assert adapter._disconnect_reason == "gateway_reconnect"
+
+    adapter._disconnect_reason = None
+    await adapter._handle_payload({"op": qq_official.OP_INVALID_SESSION, "d": ""})
+    assert adapter._disconnect_reason == "invalid_session"

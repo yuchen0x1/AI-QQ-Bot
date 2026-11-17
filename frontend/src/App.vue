@@ -73,7 +73,7 @@ const updateViewport = (event?: MediaQueryListEvent) => { isMobile.value = event
 const status = useStatusStore()
 const { state: socketState } = storeToRefs(status)
 const socket = { state: socketState, reconnect: status.reconnect }
-const socketLabel = computed(() => ({ connecting: '实时连接中', open: '实时同步', closed: '连接已断开', error: '实时连接异常' } as Record<string, string>)[socketState.value] || '系统状态')
+const socketLabel = computed(() => ({ connecting: '实时连接中', reconnecting: '重连中…', open: '实时同步', closed: '连接已断开', error: '实时连接异常' } as Record<string, string>)[socketState.value] || '系统状态')
 let releaseStatus: (() => void) | undefined
 function startStatus() {
   if (route.path === '/login' || releaseStatus) return

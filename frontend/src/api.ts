@@ -29,7 +29,7 @@ api.interceptors.response.use((response) => response, (error) => {
 export type Page<T> = { items: T[]; total: number; page: number; page_size: number }
 export const unwrap = <T>(data: T | { data: T }): T => ('data' in (data as object) ? (data as { data: T }).data : data as T)
 
-export type SocketState = 'connecting' | 'open' | 'closed' | 'error'
+export type SocketState = 'connecting' | 'reconnecting' | 'open' | 'closed' | 'error'
 export interface RealtimeSocket<T = unknown> {
   state: Readonly<Ref<SocketState>>
   lastMessage: Readonly<ShallowRef<T | null>>
@@ -47,6 +47,9 @@ export function useRealtimeSocket<T = Record<string, unknown>>(path: string, opt
   const lastMessage = shallowRef<T | null>(null)
   const reconnectEnabled = options.reconnect !== false
   const maxDelay = options.maxDelay ?? 15000
+  // 断线后按 1s/2s/4s/8s… 自动重连。头几次属于秒级自愈，页面上显示「重连中」，
+  // 只有连续失败超过这个次数才认为真的断了，避免把每次瞬时抖动都渲染成「连接已断开」。
+  const QUIET_ATTEMPTS = 4
   let socket: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined
@@ -77,13 +80,13 @@ export function useRealtimeSocket<T = Record<string, unknown>>(path: string, opt
       const { data } = await api.post<{ ticket: string }>('/ws/ticket')
       ticket = data.ticket
     } catch {
-      state.value = 'error'
       attempts += 1
+      state.value = attempts <= QUIET_ATTEMPTS ? 'reconnecting' : 'error'
       schedule()
       return
     }
     if (stopped) return
-    try { socket = new WebSocket(url(ticket)) } catch { state.value = 'error'; schedule(); return }
+    try { socket = new WebSocket(url(ticket)) } catch { attempts += 1; state.value = attempts <= QUIET_ATTEMPTS ? 'reconnecting' : 'error'; schedule(); return }
     socket.onopen = () => {
       attempts = 0
       state.value = 'open'
@@ -92,8 +95,17 @@ export function useRealtimeSocket<T = Record<string, unknown>>(path: string, opt
     socket.onmessage = (event) => {
       try { lastMessage.value = JSON.parse(event.data) as T } catch { /* 忽略非 JSON 推送 */ }
     }
-    socket.onerror = () => { state.value = 'error' }
-    socket.onclose = () => { socket = null; clearTimers(); if (!stopped) { state.value = 'closed'; attempts += 1; schedule() } }
+    // onerror 一定紧跟 onclose，这里只把「已连接」降级为「重连中」，
+    // 真正的失败判定交给 onclose 的尝试次数，避免闪一下「连接异常」。
+    socket.onerror = () => { if (state.value === 'open') state.value = 'reconnecting' }
+    socket.onclose = () => {
+      socket = null
+      clearTimers()
+      if (stopped) { state.value = 'closed'; return }
+      attempts += 1
+      state.value = attempts <= QUIET_ATTEMPTS ? 'reconnecting' : 'closed'
+      schedule()
+    }
   }
   const close = () => { stopped = true; clearTimers(); socket?.close(); socket = null; state.value = 'closed' }
   const reconnect = () => { stopped = false; attempts = 0; socket?.close(); socket = null; connect() }

@@ -281,7 +281,14 @@ class AccountManager:
 
                 async for event in adapter.listen():
                     if event.post_type == "__disconnected__":
-                        raise AdapterError("协议端断开连接")
+                        # 网关 op=7 / 4009 会话超时属于计划内轮换：不算故障。
+                        meta = event.raw or {}
+                        planned = bool(meta.get("planned"))
+                        reason = str(meta.get("reason") or ("gateway_reconnect" if planned else "network"))
+                        exc = AdapterError("网关主动轮换连接" if planned else "协议端断开连接")
+                        exc.planned = planned  # type: ignore[attr-defined]
+                        exc.reason = reason  # type: ignore[attr-defined]
+                        raise exc
                     if event.post_type == "meta_event":
                         if event.sub_type in {"heartbeat", "lifecycle"}:
                             async with SessionLocal() as db:
@@ -306,21 +313,40 @@ class AccountManager:
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001
+                planned = bool(getattr(exc, "planned", False))
+                reason = str(getattr(exc, "reason", "") or "")
                 friendly = _friendly_connection_error(exc, getattr(adapter, "protocol", "qq_official"))
-                state.last_error = friendly
-                state.state = "error"
+                state.last_error = None if planned else friendly
+                # 计划内重连走「启动中」，不再闪一下红色「异常」，也不写 ERROR 日志。
+                state.state = "starting" if planned else "error"
                 state.started_at = None
-                publish_event("account.state", {"account_id": account_db_id, "state": "error", "error": friendly[:500]})
+                publish_event(
+                    "account.state",
+                    {
+                        "account_id": account_db_id,
+                        "state": state.state,
+                        **({} if planned else {"error": friendly[:500]}),
+                    },
+                )
                 async with SessionLocal() as db:
                     await self._set_connection(
                         db,
                         account_db_id,
-                        status="error",
-                        error=friendly[:500],
+                        status=state.state,
+                        error=None if planned else friendly[:500],
                         disconnected_at=datetime.now(timezone.utc),
                     )
+                    if planned:
+                        logger.info("账号 %s 连接由官方网关轮换（%s），准备重连", state.name, reason)
+                        await write_log(
+                            db,
+                            level="INFO",
+                            category="qq",
+                            message=f"账号 {state.name} 的连接由官方网关轮换（{reason}），正在自动重连",
+                            account_id=account_db_id,
+                        )
                     # 相同错误在持续重连期间只记录一次，避免系统日志被刷屏
-                    if state.last_logged_error != friendly:
+                    elif state.last_logged_error != friendly:
                         state.last_logged_error = friendly
                         await write_log(
                             db,

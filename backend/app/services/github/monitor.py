@@ -371,6 +371,10 @@ async def handle_webhook_payload(
         return {"ok": True, "new_releases": 0, "message": "已停止不可访问仓库的监控，历史保留"}
     if not repo.monitor_enabled:
         return {"ok": True, "message": "仓库监控已暂停", "new_releases": 0}
+    # 版本「编辑」是发布流程上传资产、改说明时的常规动作，GitHub 会对同一次发布连发多次；
+    # 它不是新版本，既不进版本通道也不进普通动态通道，否则每个群都会多收一条「编辑 版本发布」。
+    if event_type == "release" and payload.get("action") == "edited":
+        return {"ok": True, "message": "版本编辑不单独通知", "new_releases": 0, "ignored": True}
     if event_type != "release" or payload.get("action") not in {"published", "released", "updated", "created"}:
         if repo.monitor_activity:
             from app.services.github.activity import ingest_activity

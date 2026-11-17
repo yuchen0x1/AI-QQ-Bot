@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -203,15 +204,22 @@ async def dispatch_release(
     """按推送规则发送通知；同一规则 + 同一 Release 只会成功入库一次。"""
     from app.services.account_manager import account_manager
 
-    rules = list(await db.scalars(select(PushRule).where(PushRule.repository_id == repo.id, PushRule.enabled.is_(True))))
+    rule_rows = list(await db.scalars(select(PushRule).where(PushRule.repository_id == repo.id, PushRule.enabled.is_(True))))
+    # 循环判据先快照成普通元组：并发投递撞唯一约束时会回滚整个会话，
+    # 回滚会让会话内所有 ORM 实例过期，之后再读 rule.event_types 就会触发
+    # 懒加载并抛出 MissingGreenlet（同步 IO 在异步上下文里不被允许），接口直接 500。
+    snapshot = [(row.id, tuple(row.event_types or ["release"]), bool(row.only_stable)) for row in rule_rows]
     records: list[PushRecord] = []
-    for rule in rules:
-        if "release" not in (rule.event_types or ["release"]):
+    for rule_id, event_types, only_stable in snapshot:
+        if "release" not in event_types:
             continue
-        if rule.only_stable and release.prerelease:
+        if only_stable and release.prerelease:
+            continue
+        rule = await db.get(PushRule, rule_id, populate_existing=True)
+        if rule is None:
             continue
         existing = await db.scalar(
-            select(PushRecord).where(PushRecord.rule_id == rule.id, PushRecord.release_id == release.id)
+            select(PushRecord).where(PushRecord.rule_id == rule_id, PushRecord.release_id == release.id)
         )
         if existing:
             continue
@@ -239,8 +247,13 @@ async def dispatch_release(
         db.add(record)
         try:
             await db.commit()
-        except Exception:  # 并发下唯一约束冲突
+        except Exception:  # 并发下唯一约束冲突：同一次投递被两个请求同时处理
             await db.rollback()
+            # 回滚同样把 repo / release 置为过期；下一轮渲染前显式重新加载，
+            # 否则读取 repo.name、release.body 会在异步上下文里懒加载并报 MissingGreenlet。
+            with contextlib.suppress(Exception):
+                await db.refresh(repo)
+                await db.refresh(release)
             continue
 
         account = await db.get(Account, rule.account_id)

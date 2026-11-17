@@ -223,6 +223,9 @@ class QQOfficialAdapter(QQAdapter):
         self._seen_events: set[str] = set()
         self._seen_order: deque[str] = deque()
         self._closing = False
+        # 断线原因：网关主动要求重连（op=7 / 4009 会话超时）属于计划内轮换，
+        # 与网络故障、鉴权失败区分开，调用方据此决定日志级别与账号状态。
+        self._disconnect_reason: str | None = None
 
     @property
     def bot_openid(self) -> str:
@@ -403,6 +406,7 @@ class QQOfficialAdapter(QQAdapter):
         """
         await self._close_ws()
         self._closing = False
+        self._disconnect_reason = None
         self._drain_queue()
         self._login_info = LoginInfo(
             self_id=self._self_id,
@@ -422,6 +426,7 @@ class QQOfficialAdapter(QQAdapter):
             return await self._connect_webhook()
         await self._close_ws()
         self._closing = False
+        self._disconnect_reason = None
         self._drain_queue()
         token = await self._ensure_token()
         gateway_data = await self._request("GET", "/gateway")
@@ -523,12 +528,15 @@ class QQOfficialAdapter(QQAdapter):
         elif op == OP_HEARTBEAT_ACK:
             self._heartbeat_acked = True
         elif op == OP_RECONNECT:
+            # op=7 是官方网关的常规会话轮换（约每小时一次），不是故障。
+            self._disconnect_reason = self._disconnect_reason or "gateway_reconnect"
             logger.info("QQ 官方网关要求重连（app=%s）", self.app_id)
             if self._ws is not None:
                 await self._ws.close()
         elif op == OP_INVALID_SESSION:
             self._session_id = None
             self._seq = None
+            self._disconnect_reason = "invalid_session"
             self._ready_error = (
                 "官方网关拒绝鉴权（Invalid Session）：请确认 AppSecret 正确、"
                 "订阅的 Intents 均已获平台授权、且回调方式选择为 WebSocket"
@@ -610,14 +618,24 @@ class QQOfficialAdapter(QQAdapter):
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.warning("QQ 官方机器人 WebSocket 断开（app=%s）：%s", self.app_id, exc)
+            if self._disconnect_reason is None:
+                self._disconnect_reason = "network"
+            # 网关主动轮换时的关闭异常是预期内的，降级为 INFO，避免每小时刷一条 WARNING。
+            if self._disconnect_reason in {"gateway_reconnect", "invalid_session"}:
+                logger.info("QQ 官方机器人 WebSocket 关闭（app=%s，原因=%s）：%s", self.app_id, self._disconnect_reason, exc)
+            else:
+                logger.warning("QQ 官方机器人 WebSocket 断开（app=%s）：%s", self.app_id, exc)
         finally:
             self._connected = False
             if ready_event and not ready_event.is_set():
                 self._ready_error = self._ready_error or "官方网关连接在鉴权完成前已关闭"
                 ready_event.set()
             if not self._closing:
-                await self._queue.put(AdapterEvent(post_type="__disconnected__"))
+                reason = self._disconnect_reason or "network"
+                await self._queue.put(AdapterEvent(
+                    post_type="__disconnected__",
+                    raw={"reason": reason, "planned": reason in {"gateway_reconnect", "heartbeat_timeout"}},
+                ))
 
     async def _heartbeat_loop(self) -> None:
         try:
@@ -626,6 +644,7 @@ class QQOfficialAdapter(QQAdapter):
                 if not self._connected:
                     return
                 if not self._heartbeat_acked:
+                    self._disconnect_reason = self._disconnect_reason or "heartbeat_timeout"
                     logger.warning("官方网关连续未响应心跳 ACK，主动重连（app=%s）", self.app_id)
                     if self._ws is not None:
                         await self._ws.close()
