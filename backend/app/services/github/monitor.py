@@ -388,9 +388,10 @@ async def handle_webhook_payload(
         tag = release_payload.get("tag_name")
         if not tag:
             return {"ok": False, "message": "release 事件缺少 tag_name", "new_releases": 0}
-        key = f"webhook:{repo.id}:{tag}:{payload.get('action')}"
-        if delivery_id:
-            key = f"webhook:{repo.id}:{delivery_id}"
+        # GitHub 对同一次发布可能连发 created / released / published 多个投递；按 tag + 归一化动作去重，
+        # 不用 delivery id（否则每条投递各生成一条事件，同一次发布会被播报多次）。
+        release_action = "published" if payload.get("action") in {"published", "released", "created"} else str(payload.get("action") or "")
+        key = f"webhook:{repo.id}:{tag}:{release_action}" if release_action else f"webhook:{repo.id}:{tag}"
         exists = await db.scalar(select(GithubEvent.id).where(GithubEvent.dedupe_key == key))
         if exists:
             return {"ok": True, "message": "重复事件已忽略", "new_releases": 0, "duplicate": True}

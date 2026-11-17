@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 2026-11-17 — 修复 Star / Fork 跨通道重复通知（v1.4.9）
+
+- **生产现象**：同一次 Star 在通知群里出现两条卡片，第一条标题带仓库名（`bwl269 新增 Star 动态：HongGuo-PC`），第二条不带（`bwl269 新增 Star 动态`）。
+- **根因**：`normalize_activity` 给 Star / Fork / Wiki / 协作者 / 公开仓库这几类事件拼接了通道私有 ID（Webhook 的 delivery UUID 或 Events API 的事件流水号）。GitHub 不为这类事件提供跨通道共用的 ID，同一次事件必然算出两个 `dedupe_key`；而仓库同时开着实时 Webhook 与 300 秒轮询，两条通道各入库一条并各自投递。标题差异也来自通道：Webhook 的 payload 带 `repository` 对象，轮询的 `WatchEvent` 不带。
+- **修复**：这类事件改用与通道无关的去重键 `[操作者, 动作, 作用对象, 事件日期]`；日期取事件真实发生时间（轮询用事件 `created_at`、Webhook 用 `starred_at` / `forkee.created_at`），因此轮询迟到数小时仍能判为同一条。Star 标题不再拼接仓库名，两条通道文案一致。分支/标签增删同样改为 `[ref_type, ref, 操作者, 事件日期]`——生产库里 `delete` 事件曾出现 Webhook 与 3 小时后轮询各一条。
+- **顺带**：Release Webhook 的去重键从 `webhook:{repo}:{delivery_id}` 归一化为 `webhook:{repo}:{tag}:published`（`created` / `released` / `published` 视为同一动作），同一次发布不再在事件表里留下两行；推送侧原本就按版本去重，用户可见行为不变。
+- 代价与边界：同一操作者在同一天内对同一对象重复触发（例如先取消 Star 再重新 Star）只播报一次；跨 UTC 日界且轮询延迟数小时的无时间戳事件（成员变更、Wiki）仍可能各播一次。
+- 验证：新增 4 项回归测试（Webhook + 轮询同一颗 Star 只投递一次、跨通道去重键与标题一致性、迟到 3 小时的分支删除不重复播报、released + published 双投递只播报一次）；后端全量 pytest 234 passed、1 skipped（共 235 项），Ruff / compileall 通过。
+
 ## 2026-11-16 — 项目演进批次（v1.4.8）
 
 - 安全：管理台浏览器改用 HttpOnly Cookie；Gitee Token 不再进入 URL；Docker forwarded header 信任收窄；Webhook body 增加 2 MiB 应用层上限。

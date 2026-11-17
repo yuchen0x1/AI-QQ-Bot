@@ -197,6 +197,117 @@ async def test_signed_push_and_comment_are_delivered_once_and_retry_after_offlin
     assert any(r["event_id"] and r["release_id"] is None for r in records)
 
 
+async def _webhook_repo(client, admin_headers, db, mock_account):
+    """连接通知、接通仓库，并给仓库配上签名密钥，返回 (repo, 投递函数)。"""
+    await configure(client, admin_headers, mock_account)
+    user_id = (await db.scalar(select(UserGithubToken).where(UserGithubToken.login == "notifier"))).user_id
+    await sync_subscription(db, user_id)
+    repo = await db.scalar(select(GithubRepository).where(GithubRepository.full_name == "notifier/project-one"))
+    await client.put(f"/api/github/repos/{repo.id}", headers=admin_headers, json={"webhook_secret": "activity-secret"})
+
+    async def deliver(kind, payload, delivery):
+        body = json.dumps(payload).encode()
+        return await client.post(
+            f"/api/webhook/github/{repo.id}", content=body,
+            headers={"x-github-event": kind, "x-github-delivery": delivery,
+                     "x-hub-signature-256": "sha256=" + hmac.new(b"activity-secret", body, hashlib.sha256).hexdigest()},
+        )
+
+    return repo, deliver
+
+
+async def test_star_from_webhook_and_poll_is_delivered_once(client, admin_headers, db, mock_account, notification_transport):
+    """生产事故回归：同一颗 Star 被 Webhook 与轮询各播报一次。"""
+    repo, deliver = await _webhook_repo(client, admin_headers, db, mock_account)
+    starred_at = datetime.now(timezone.utc).isoformat()
+    webhook_payload = {
+        "action": "started", "starred_at": starred_at, "sender": {"login": "bwl269"},
+        # Webhook 的 payload 带 repository 对象，轮询的 WatchEvent 不带。
+        "repository": {"id": 555, "full_name": repo.full_name, "html_url": repo.html_url, "updated_at": starred_at},
+    }
+    first = await deliver("star", webhook_payload, "star-delivery-1")
+    assert first.json()["pushed"] == 1, first.text
+
+    notification_transport["events"] = [{
+        "id": "900001", "type": "WatchEvent", "actor": {"login": "bwl269"}, "created_at": starred_at,
+        "payload": {"action": "started"},
+    }]
+    repo.activity_initialized_at = datetime.now(timezone.utc)
+    polled = await sync_activity(db, repo, GithubClient(TOKEN), notify=True)
+    assert polled["pushed"] == 0 and polled["new_events"] == 0
+
+    events = list(await db.scalars(select(GithubEvent).where(
+        GithubEvent.repository_id == repo.id, GithubEvent.event_type == "star")))
+    assert len(events) == 1
+    star_messages = [m for m in account_manager.adapter(mock_account["id"]).outbox if "Star" in m["message"]]
+    assert len(star_messages) == 1
+
+
+async def test_channel_agnostic_identity_matches_between_sources():
+    """同一次 Star / Fork / 分支增删，两条通道算出的去重键必须相同。"""
+    from app.services.github.activity import normalize_activity
+
+    repo = GithubRepository(id=42, owner="notifier", name="identity", full_name="notifier/identity",
+                            html_url="https://github.com/notifier/identity", default_branch="main")
+    occurred = "2026-11-17T02:05:43Z"
+    webhook_star = normalize_activity(repo, "star", {"action": "started", "starred_at": occurred, "sender": {"login": "bwl269"},
+                                                    "repository": {"id": 7, "full_name": repo.full_name, "updated_at": occurred}})
+    poll_star = normalize_activity(repo, "star", {"action": "started", "_event_id": "20341121977", "_occurred_at": occurred,
+                                                  "sender": {"login": "bwl269"}})
+    assert webhook_star["dedupe_key"] == poll_star["dedupe_key"]
+    assert webhook_star["title"] == poll_star["title"] == "bwl269 新增 Star 动态"
+
+    forkee = {"id": 991, "full_name": "someone/identity", "created_at": occurred}
+    webhook_fork = normalize_activity(repo, "fork", {"sender": {"login": "vomzfly"}, "forkee": forkee})
+    poll_fork = normalize_activity(repo, "fork", {"action": "forked", "_occurred_at": occurred, "sender": {"login": "vomzfly"},
+                                                  "forkee": forkee})
+    assert webhook_fork["dedupe_key"] == poll_fork["dedupe_key"]
+    assert webhook_fork["title"] == poll_fork["title"]
+
+    webhook_delete = normalize_activity(repo, "delete", {"ref": "fix/small-bugs", "ref_type": "branch", "sender": {"login": "notifier"}})
+    poll_delete = normalize_activity(repo, "delete", {"ref": "fix/small-bugs", "ref_type": "branch", "sender": {"login": "notifier"},
+                                                      "_event_id": "27348831874", "_occurred_at": occurred})
+    assert webhook_delete["dedupe_key"] == poll_delete["dedupe_key"]
+
+
+async def test_branch_delete_reported_late_by_poll_is_not_repeated(client, admin_headers, db, mock_account, notification_transport):
+    """公共事件流迟到数小时后补发同一分支删除，不应再播报一次。"""
+    repo, deliver = await _webhook_repo(client, admin_headers, db, mock_account)
+    payload = {"ref": "fix/small-bugs", "ref_type": "branch", "sender": {"login": "notifier"}}
+    assert (await deliver("delete", payload, "delete-1")).json()["pushed"] == 1
+
+    notification_transport["events"] = [{
+        "id": "27348831874", "type": "DeleteEvent", "actor": {"login": "notifier"},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "payload": {"ref": "fix/small-bugs", "ref_type": "branch"},
+    }]
+    repo.activity_initialized_at = datetime.now(timezone.utc)
+    polled = await sync_activity(db, repo, GithubClient(TOKEN), notify=True)
+    assert polled["pushed"] == 0 and polled["new_events"] == 0
+    deletes = list(await db.scalars(select(GithubEvent).where(
+        GithubEvent.repository_id == repo.id, GithubEvent.event_type == "delete")))
+    assert len(deletes) == 1
+
+
+async def test_release_published_and_released_deliveries_notify_once(client, admin_headers, db, mock_account, notification_transport):
+    """GitHub 对同一次发布连发 released + published，只应入库并播报一次。"""
+    repo, deliver = await _webhook_repo(client, admin_headers, db, mock_account)
+    release = {"tag_name": "v9.9.9", "name": "v9.9.9", "body": "- 修复重复通知", "draft": False, "prerelease": False,
+               "html_url": "https://github.com/notifier/project-one/releases/tag/v9.9.9",
+               "published_at": datetime.now(timezone.utc).isoformat(), "assets": []}
+    first = await deliver("release", {"action": "released", "release": release, "repository": {"full_name": repo.full_name}}, "rel-1")
+    assert first.status_code == 200
+    second = await deliver("release", {"action": "published", "release": release, "repository": {"full_name": repo.full_name}}, "rel-2")
+    assert second.json().get("duplicate") is True
+
+    events = list(await db.scalars(select(GithubEvent).where(
+        GithubEvent.repository_id == repo.id, GithubEvent.event_type == "release")))
+    assert len(events) == 1
+    records = list(await db.scalars(select(PushRecord).where(PushRecord.repository_id == repo.id,
+                                                             PushRecord.release_tag == "v9.9.9")))
+    assert len(records) == 1
+
+
 async def test_one_time_group_binding_is_account_specific(client, admin_headers, db, mock_account, notification_transport):
     await configure(client, admin_headers, mock_account)
     response = await client.post("/api/github/automation/binding-code", headers=admin_headers)

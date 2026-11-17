@@ -56,7 +56,7 @@ Token 输入管理台后由后端验证账号并加密保存，接口不回显�
 - 本地或无公网 HTTPS：保持「自动为仓库配置实时 Webhook」关闭，采用轮询。GitHub Events API 官方注明可能延迟 30 秒至 6 小时，仅保留最近 30 天、最多 300 条，并且并非所有 Webhook 事件都会出现在活动列表中，因此**不能保证所有动态即时送达**。Actions 和讨论评论等完整事件需要 Webhook。轮询请求遵守 GitHub 的 X-Poll-Interval；仓库较多时自动加长间隔，为同步等操作保留 API 配额。页面显示实际间隔。
 - 服务器公网 HTTPS 就绪：设置 `.env` 的 `PUBLIC_BASE_URL=https://你的域名`，为 Token 授予 Webhooks 读写，勾选自动 Webhook 后保存。后台仅创建/更新 URL 与本站精确一致的回调，不覆盖其它集成；每仓库使用随机 Secret 并验证 HMAC。失败的仓库会列出来，后续同步重试。取消勾选后不再自动修改 GitHub，已安装的回调仍会进入后台并按当前通知规则处理；如要移除回调，可在 GitHub 仓库 Settings → Webhooks 中删除本站地址。
 
-Webhook 重投通过事件/投递标识去重；Webhook 与轮询对于相同分支与 before/after 提交的代码推送也共享去重键。GitHub 的两种通道不提供统一事件 ID，部分分支、Star 等事件经两种通道到达时可能各有一条通知。
+Webhook 重投通过事件/投递标识去重；Webhook 与轮询对于相同分支与 before/after 提交的代码推送也共享去重键。Star、Fork、Wiki、协作者、公开仓库与分支/标签增删在 GitHub 侧没有跨通道共用的 ID，因此按「操作者 + 动作 + 对象 + 事件日期」去重，同一次事件经两条通道到达只播报一次（v1.4.9 起；更早版本可能出现两条）。
 
 参考：[GitHub Events API](https://docs.github.com/en/rest/activity/events)、[仓库 Webhook API](https://docs.github.com/en/rest/repos/webhooks)、[QQ 官方消息收发概述](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html)。QQ 平台规则应以当前官网文档与实际接口结果为准，旧的 GitHub 文档快照可能已经过时。
 

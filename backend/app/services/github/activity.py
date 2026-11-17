@@ -35,6 +35,44 @@ ACTION_LABELS = {"opened": "新建", "closed": "关闭", "reopened": "重新打�
                  "labeled": "添加标签", "unlabeled": "移除标签", "assigned": "分配处理人", "completed": "运行完成",
                  "started": "新增", "released": "发布", "updated": "更新", "unpublished": "撤销发布"}
 
+# 这些事件在 GitHub 侧没有跨通道共用的稳定 ID：Webhook 给的是 delivery UUID，
+# Events API 给的是事件流水号，同一次 Star/Fork 经两条通道到达时两者必然不同。
+# 因此它们的去重键只由「谁 + 做了什么 + 作用对象 + 事件日期」构造，见 _channel_agnostic_identity。
+CHANNEL_AGNOSTIC_TYPES = {"star", "fork", "public", "gollum", "member", "repository"}
+
+
+def _event_day(payload: dict[str, Any]) -> str:
+    """事件发生的 UTC 日期；两条通道指向同一次事件时取值一致，可安全进去重键。"""
+    for value in (
+        payload.get("_occurred_at"),
+        payload.get("starred_at"),
+        payload.get("created_at"),
+        (payload.get("forkee") or {}).get("created_at") if isinstance(payload.get("forkee"), dict) else None,
+    ):
+        parsed = _parse_event_time(value)
+        if parsed is None:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    # Webhook 的多数事件不带时间戳，退化为收件日期：与轮询路径的事件日期通常是同一天。
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _channel_agnostic_identity(event_type: str, actor: str, action: str, payload: dict[str, Any]) -> list[str]:
+    subject = ""
+    if event_type == "fork":
+        forkee = payload.get("forkee") if isinstance(payload.get("forkee"), dict) else {}
+        subject = str(forkee.get("full_name") or forkee.get("id") or "")
+    elif event_type == "member":
+        member = payload.get("member") if isinstance(payload.get("member"), dict) else {}
+        subject = str(member.get("login") or member.get("id") or "")
+    elif event_type == "gollum":
+        pages = payload.get("pages") if isinstance(payload.get("pages"), list) else []
+        subject = "|".join(sorted(str(page.get("sha") or page.get("page_name") or "") for page in pages))
+    # star / public / repository 没有更细的对象，仓库本身已在去重键前缀里。
+    return [actor, action, subject, _event_day(payload)]
+
 
 def normalize_activity(repo: GithubRepository, event_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     if event_type not in ACTIVITY_TYPES:
@@ -46,6 +84,8 @@ def normalize_activity(repo: GithubRepository, event_type: str, payload: dict[st
     action = str(payload.get("action") or "")
     if event_type == "star" and action == "started":
         action = "created"
+    if event_type == "fork":
+        action = "forked"
     detail = ""
     url = repo.html_url
     identity: Any = None
@@ -89,7 +129,8 @@ def normalize_activity(repo: GithubRepository, event_type: str, payload: dict[st
             "commit_count": len(commits), "files": files[:20], "file_count": len(files), "stats": stats,
         }
     elif event_type in {"create", "delete"}:
-        identity = [payload.get("ref_type"), payload.get("ref"), payload.get("_event_id") or payload.get("_delivery_id")]
+        # 分支/标签的增删同样没有跨通道共用 ID，用 ref + 操作者 + 事件日期去重。
+        identity = [payload.get("ref_type"), payload.get("ref"), actor, _event_day(payload)]
         title = f"{actor} {'创建' if event_type == 'create' else '删除'}{'标签' if payload.get('ref_type') == 'tag' else '分支'} {payload.get('ref') or ''}"
         card = {
             "kind": "activity", "event_type": event_type, "label": EVENT_LABELS[event_type],
@@ -100,6 +141,10 @@ def normalize_activity(repo: GithubRepository, event_type: str, payload: dict[st
         entity = next((payload[k] for k in ("comment", "review", "workflow_run", "release", "pull_request", "issue", "discussion", "forkee", "member", "repository") if isinstance(payload.get(k), dict)), {})
         number = (payload.get("issue") or payload.get("pull_request") or payload.get("discussion") or {}).get("number") or payload.get("number")
         subject = entity.get("title") or entity.get("name") or entity.get("tag_name") or entity.get("full_name") or entity.get("login") or ""
+        if event_type in {"star", "public"}:
+            # Webhook 的 payload 带 repository 对象，轮询的 WatchEvent 不带；
+            # 仓库名在正文「项目」一行已有，标题不再拼接，保证两条通道文案一致。
+            subject = ""
         verb = "合并" if event_type == "pull_request" and (payload.get("pull_request") or {}).get("merged") and action == "closed" else ACTION_LABELS.get(action, action)
         title = f"{actor} {verb} {EVENT_LABELS[event_type]}" + (f" #{number}" if number else "") + (f"：{subject}" if subject else "")
         detail = strip_markdown(str(entity.get("body") or ""))
@@ -109,13 +154,15 @@ def normalize_activity(repo: GithubRepository, event_type: str, payload: dict[st
             detail = "\n".join(str(page.get("title") or "") for page in (payload.get("pages") or [])[:8])
         url = entity.get("html_url") or url
         identity = [entity.get("id") or number or actor, action, entity.get("updated_at"), subject, detail]
-        if event_type in {"star", "public", "gollum", "member", "repository"}:
-            identity.append(payload.get("_event_id") or payload.get("_delivery_id"))
         card = {
             "kind": "activity", "event_type": event_type, "label": EVENT_LABELS[event_type],
             "title": title, "detail": truncate(detail, 600), "author": actor,
             "url": url, "repo_url": repo.html_url,
         }
+    if event_type in CHANNEL_AGNOSTIC_TYPES:
+        # 同一次 Star/Fork/成员变更不能因为「从哪条通道来」而被判成两条事件：
+        # 丢掉通道私有 ID，只保留跨通道一致的语义字段。
+        identity = _channel_agnostic_identity(event_type, actor, action, payload)
     key_data = json.dumps([event_type, identity], sort_keys=True, ensure_ascii=False)
     key = f"activity:{repo.id}:" + hashlib.sha256(key_data.encode()).hexdigest()
     return {"dedupe_key": key, "event_type": event_type, "action": action, "title": truncate(title, 250),
@@ -228,6 +275,8 @@ async def sync_activity(db: AsyncSession, repo: GithubRepository, client, *, not
         payload = dict(item.get("payload") or {})
         payload["sender"] = item.get("actor") or {}
         payload["_event_id"] = str(item.get("id") or "")
+        # 事件真实发生时间：去重键需要它，才能在轮询迟到数小时后仍与 Webhook 判为同一条。
+        payload["_occurred_at"] = item.get("created_at")
         if event_type == "push" and not payload.get("commits"):
             before, head = payload.get("before"), payload.get("head")
             if before and head and set(before) != {"0"}:
