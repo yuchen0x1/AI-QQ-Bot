@@ -8,19 +8,15 @@
 
 ## 最新更新
 
-### v1.4.11（2026-11-17）
+<!-- github-release:start -->
 
-- 管理台支持按浏览器或系统语言自动选择中文/English，也可手动切换并保存。
-- 导航、状态、设置和引导弹窗支持即时更新；机器人消息与业务数据保持原样。
+**[v1.4.11](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.4.11)** · 2026-11-17
 
-### v1.4.8（2026-11-16）
+本版本聚焦管理台界面壳层多语言：界面可按浏览器或系统语言自动选择中文/English，也可手动切换并持久化。机器人消息处理、账号数据和 API 字段不随界面语言改写。
 
-- 管理台浏览器认证改用后端 HttpOnly Cookie；Bearer 仍保留给 API 客户端，浏览器不再把长效 JWT 写入 localStorage。
-- 修复推送规则目标群字段错配，增加资源页/仪表盘失败重试；修复宣传站 favicon 和移动端导航入口。
-- Gitee Token 不再进入 URL；SQLite 备份改用在线备份和原子替换；GitHub/QQ Webhook 增加 2 MiB 应用层 body 上限。
-- 自动禁言记录真实到期时间，原生更新器可安全处理损坏状态；Docker forwarded header 信任范围收窄。
-- CI/release 增加依赖检查、编译、Compose、diff 和 SHA-256 自检。
-- 50 项对标升级计划与实际状态见 [竞品分析](COMPETITOR_ANALYSIS.md)、[升级路线](UPGRADE_ROADMAP.md)、[升级报告](UPGRADE_REPORT.md) 和 [项目审计](PROJECT_AUDIT.md)。升级后如提示未登录，请重新登录一次。
+[全部发行记录](https://github.com/yuchen0x1/AI-QQ-Bot/releases)
+
+<!-- github-release:end -->
 
 完整记录见 [更新历史](docs/releases/release-notes.md)。
 
