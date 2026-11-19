@@ -63,8 +63,7 @@ def _safe_asset(asset: dict[str, Any]) -> dict[str, Any] | None:
     if parsed.scheme != "https" or parsed.hostname not in {"github.com", "objects.githubusercontent.com"}:
         return None
     digest = str(asset.get("digest") or "").strip()
-    if digest and not digest.lower().startswith("sha256:"):
-        digest = ""
+    digest = digest.lower() if re.fullmatch(r"sha256:[0-9a-f]{64}", digest, re.IGNORECASE) else ""
     return {
         "name": str(asset.get("name") or ""),
         "size": int(asset.get("size") or 0),

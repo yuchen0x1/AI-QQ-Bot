@@ -35,6 +35,9 @@ GITHUB_HOSTS = {
 }
 MAX_ARCHIVE = 256 * 1024 * 1024
 MAX_UNPACKED = 1024 * 1024 * 1024
+MAX_PROVENANCE = 16 * 1024 * 1024
+PROVENANCE_NAME = "provenance.sigstore.json"
+TRUSTED_ROOT = Path("/etc/qbot/sigstore-trusted-root.jsonl")
 PHASES = {
     "queued": "已加入升级任务",
     "resolving": "读取正式版本信息",
@@ -152,14 +155,14 @@ def download_sources(asset: dict, repository: str, version: str, mirrors: list[s
     return sources
 
 
-def release_asset(release: dict, repository: str, version: str) -> dict:
+def release_asset(release: dict, repository: str, version: str, *, provenance: bool = False) -> dict:
     tag = "v" + version
     if release.get("tag_name") != tag or release.get("draft") or release.get("prerelease"):
         raise ValueError("目标版本不是指定的正式发布")
-    name = f"qbot-ai-{version}-native.tar.gz"
+    name = PROVENANCE_NAME if provenance else f"qbot-ai-{version}-native.tar.gz"
     matches = [a for a in release.get("assets", []) if a.get("name") == name]
     if len(matches) != 1:
-        raise ValueError("该版本没有可自动安装的服务器升级包")
+        raise ValueError(f"正式发布缺少所需资产：{name}")
     asset = matches[0]
     if not isinstance(asset.get("id"), int) or asset["id"] <= 0:
         raise ValueError("升级包标识无效")
@@ -168,7 +171,8 @@ def release_asset(release: dict, repository: str, version: str) -> dict:
         r"sha256:[0-9a-f]{64}", asset.get("digest", "")
     ):
         raise ValueError("升级包来源或 SHA-256 信息不符合要求")
-    if not isinstance(asset.get("size"), int) or not 0 < asset["size"] <= MAX_ARCHIVE:
+    max_size = MAX_PROVENANCE if provenance else MAX_ARCHIVE
+    if not isinstance(asset.get("size"), int) or not 0 < asset["size"] <= max_size:
         raise ValueError("升级包大小不符合要求")
     return asset
 
@@ -260,6 +264,10 @@ class Updater:
         self.state_error: str | None = None
         self.opener = build_opener(GithubRedirects())
         self.mirrors = [m for m in (config.get("download_mirrors") or []) if valid_mirror(m)]
+        self.verifier = shutil.which("gh", path="/usr/local/bin:/usr/bin")
+
+    def provenance_ready(self) -> bool:
+        return bool(self.verifier and TRUSTED_ROOT.is_file())
 
     def current_job(self) -> dict | None:
         if not self.pointer.exists():
@@ -294,7 +302,11 @@ class Updater:
                 "updated_at",
                 "error",
             }
-            result = {"mode": "native_systemd", "job": {k: v for k, v in job.items() if k in keys} if job else None}
+            result = {
+                "mode": "native_systemd",
+                "provenance_ready": self.provenance_ready(),
+                "job": {k: v for k, v in job.items() if k in keys} if job else None,
+            }
             if self.state_error:
                 result["error"] = self.state_error
             return result
@@ -369,7 +381,9 @@ class Updater:
             raise last
         if len(raw) > 2 * 1024 * 1024:
             raise ValueError("版本信息过大")
-        return release_asset(json.loads(raw), repository, version)
+        release = json.loads(raw)
+        asset = release_asset(release, repository, version)
+        return {**asset, "provenance": release_asset(release, repository, version, provenance=True)}
 
     def download(self, job: dict, asset: dict, path: Path) -> None:
         last: Exception | None = None
@@ -388,7 +402,7 @@ class Updater:
         """Mirrors may redirect within their own host; anything else is rejected like non-GitHub."""
         return build_opener(GithubRedirects(frozenset({host_name})))
 
-    def _download_once(self, job: dict, asset: dict, path: Path, source: str | None) -> None:
+    def _download_once(self, job: dict, asset: dict, path: Path, source: str | None, *, report_progress=True) -> None:
         if source:
             request = Request(
                 source,
@@ -411,8 +425,10 @@ class Updater:
                     raise ValueError("下载大小或等待时间超过限制")
                 digest.update(chunk)
                 out.write(chunk)
-                self.save(job, "downloading", 10 + int(25 * total / asset["size"]))
-        self.save(job, "verifying", 36)
+                if report_progress:
+                    self.save(job, "downloading", 10 + int(25 * total / asset["size"]))
+        if report_progress:
+            self.save(job, "verifying", 36)
         if total != asset["size"] or "sha256:" + digest.hexdigest() != asset["digest"]:
             raise ValueError("下载文件 SHA-256 校验不通过")
 
@@ -430,6 +446,20 @@ class Updater:
 
     def service(self, job: dict, action: str) -> None:
         self.command(job, ["/usr/bin/systemctl", action, self.config["service"]])
+
+    def verify_provenance(self, job: dict, archive: Path, bundle: Path) -> None:
+        if not self.provenance_ready():
+            raise ValueError("服务器缺少 GitHub CLI 或 Sigstore 信任根，请重新配置升级服务")
+        repository = self.config["repository"]
+        try:
+            self.command(job, [
+                self.verifier, "attestation", "verify", str(archive),
+                "--repo", repository, "--signer-workflow", repository + "/.github/workflows/release.yml",
+                "--source-ref", "refs/tags/v" + job["version"], "--deny-self-hosted-runners",
+                "--bundle", str(bundle), "--custom-trusted-root", str(TRUSTED_ROOT),
+            ], timeout=60)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError("升级包来源签名验证失败，请检查服务器升级日志") from exc
 
     def build_environment(self, job: dict, folder: Path) -> None:
         import pwd
@@ -544,12 +574,17 @@ class Updater:
         self.save(job, "rolled_back", 100, status="rolled_back")
 
     def install(self, job: dict) -> None:
+        bundle = self.jobs / (job["id"] + ".sigstore.json")
         try:
             self.save(job, "resolving", 5, status="running")
+            if not self.provenance_ready():
+                raise ValueError("服务器缺少 GitHub CLI 或 Sigstore 信任根，请重新配置升级服务")
             asset = self.fetch_release(job["version"])
             archive = self.jobs / (job["id"] + ".tar.gz")
             self.save(job, "downloading", 10)
             self.download(job, asset, archive)
+            self._download_once(job, asset["provenance"], bundle, None, report_progress=False)
+            self.verify_provenance(job, archive, bundle)
             folder = below(self.releases, Path(job["new_release"]))
             self.save(job, "extracting", 40)
             unpack(archive, folder, job["version"])

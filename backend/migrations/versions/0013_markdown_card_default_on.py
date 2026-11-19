@@ -12,8 +12,8 @@ depends_on = None
 
 
 def upgrade():
-    op.execute("UPDATE push_rules SET markdown_card = 1")
+    op.execute("UPDATE push_rules SET markdown_card = TRUE")
 
 
 def downgrade():
-    op.execute("UPDATE push_rules SET markdown_card = 0")
+    op.execute("UPDATE push_rules SET markdown_card = FALSE")

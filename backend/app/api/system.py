@@ -96,8 +96,9 @@ async def update_info(channel: str | None = None, _: User = Depends(require("sys
     result = await check_for_update(channel)
     result["installer"] = await installer_state()
     native = f"qbot-ai-{result.get('latest_version')}-native.tar.gz"
+    assets = {asset["name"] for asset in result["assets"] if asset.get("sha256")}
     result["installable"] = bool(result["installer"]["available"] and result.get("update_available")
-        and not result.get("prerelease") and any(a["name"] == native and a.get("sha256") for a in result["assets"]))
+        and not result.get("prerelease") and {native, "provenance.sigstore.json"} <= assets)
     return result
 
 
@@ -116,7 +117,10 @@ async def install_status(_: User = Depends(require("system:manage"))):
 @router.post("/update/install", status_code=202)
 async def install_update(payload: InstallRequest, db: AsyncSession = Depends(get_db),
                          user: User = Depends(require("system:manage"))):
-    from app.services.update_installer import installer_rpc, InstallerUnavailable
+    from app.services.update_installer import installer_state, installer_rpc, InstallerUnavailable
+    state = await installer_state()
+    if not state["available"]:
+        raise HTTPException(409, state["reason"])
     try:
         state = await installer_rpc("POST", {"version": payload.version, "request_id": str(payload.request_id)})
     except InstallerUnavailable as exc:

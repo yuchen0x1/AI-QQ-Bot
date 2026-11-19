@@ -32,7 +32,14 @@ def release(version="2.0.0"):
                 "size": 100,
                 "digest": "sha256:" + "a" * 64,
                 "browser_download_url": f"https://github.com/yuchen0x1/AI-QQ-Bot/releases/download/v{version}/{name}",
-            }
+            },
+            {
+                "name": "provenance.sigstore.json",
+                "id": 124,
+                "size": 100,
+                "digest": "sha256:" + "b" * 64,
+                "browser_download_url": f"https://github.com/yuchen0x1/AI-QQ-Bot/releases/download/v{version}/provenance.sigstore.json",
+            },
         ],
     }
 
@@ -338,13 +345,15 @@ async def test_upgrade_api_is_authenticated_idempotent_bridge_and_rejects_paths(
 
     async def rpc(method="GET", payload=None):
         sent.append((method, payload))
+        if method == "GET":
+            return {"provenance_ready": True, "job": None}
         return {"job": {"id": str(payload["request_id"]), "status": "queued"}}
 
     monkeypatch.setattr(update_installer, "installer_rpc", rpc)
     payload = {"version": "2.0.0", "request_id": str(uuid4())}
     response = await client.post("/api/system/update/install", headers=admin_headers, json=payload)
     assert response.status_code == 202
-    assert sent == [("POST", payload)]
+    assert sent == [("GET", None), ("POST", payload)]
     bad = {**payload, "url": "https://attacker.invalid/code"}
     assert (await client.post("/api/system/update/install", headers=admin_headers, json=bad)).status_code == 422
     # A fresh HTTP client has no admin cookie from the shared fixture.
@@ -358,3 +367,36 @@ async def test_missing_host_installer_is_reported_truthfully(monkeypatch):
     monkeypatch.setattr(settings, "update_socket", "")
     state = await update_installer.installer_state()
     assert not state["available"] and state["job"] is None
+
+
+async def test_legacy_host_installer_is_not_asked_to_install(client, admin_headers, monkeypatch):
+    async def rpc(method="GET", payload=None):
+        assert method == "GET"
+        return {"mode": "native_systemd", "job": None}
+
+    monkeypatch.setattr(update_installer, "installer_rpc", rpc)
+    response = await client.post("/api/system/update/install", headers=admin_headers,
+                                 json={"version": "2.0.0", "request_id": str(uuid4())})
+    assert response.status_code == 409
+
+
+def test_native_release_rejects_missing_provenance():
+    data = release()
+    data["assets"].pop()
+    with pytest.raises(ValueError, match="provenance.sigstore.json"):
+        host["release_asset"](data, "yuchen0x1/AI-QQ-Bot", "2.0.0", provenance=True)
+
+
+def test_native_release_accepts_a_large_but_bounded_provenance_bundle():
+    data = release()
+    data["assets"][1]["size"] = 2 * 1024 * 1024 + 1
+    assert host["release_asset"](
+        data, "yuchen0x1/AI-QQ-Bot", "2.0.0", provenance=True
+    )["size"] == 2 * 1024 * 1024 + 1
+
+
+def test_native_release_rejects_an_oversized_provenance_bundle():
+    data = release()
+    data["assets"][1]["size"] = host["MAX_PROVENANCE"] + 1
+    with pytest.raises(ValueError):
+        host["release_asset"](data, "yuchen0x1/AI-QQ-Bot", "2.0.0", provenance=True)

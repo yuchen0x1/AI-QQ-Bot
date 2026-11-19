@@ -4,6 +4,7 @@
     <div class="update-summary"><div><span>当前版本</span><b>v{{ info.current_version || '—' }}</b></div><div><span>最新版本</span><b>v{{ info.latest_version || '—' }}</b></div><div><span>渠道</span><b>{{ info.channel || 'stable' }}</b></div></div>
     <div class="update-actions">
       <el-button v-if="updateAvailable" type="primary" :loading="starting" :disabled="active || job?.status === 'attention' || !info.installable" @click="install">{{ active ? '正在升级' : '立即升级' }}</el-button>
+      <el-button v-if="updateAvailable && !active && !deferred" @click="deferUpdate">稍后提醒</el-button>
       <el-button :loading="checking" :disabled="active" @click="check(true)">检查更新</el-button>
       <el-link v-if="info.release_url" :href="info.release_url" target="_blank" type="primary">查看发布说明</el-link>
       <span v-if="info.published_at" class="subtext">发布时间：{{ new Date(info.published_at).toLocaleString('zh-CN') }}</span>
@@ -24,15 +25,22 @@
 </template>
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api'
 const info = ref<any>({}), job = ref<any>(null), checking = ref(false), starting = ref(false), reconnecting = ref(false)
 const updateAvailable = computed(() => Boolean(info.value.update_available))
+const deferredVersion = ref(localStorage.getItem('qbot_deferred_update'))
+const deferred = computed(() => deferredVersion.value === info.value.latest_version)
 const active = computed(() => ['queued', 'running'].includes(job.value?.status))
 const statusLabel = computed(() => active.value ? '升级中' : checking.value ? '检查中…' : updateAvailable.value ? '发现新版本' : info.value.ok ? '已是最新版本' : '等待检查')
 const progressStatus = computed(() => job.value?.status === 'succeeded' ? 'success' : ['failed', 'rolled_back', 'attention'].includes(job.value?.status) ? 'exception' : undefined)
 let timer: ReturnType<typeof setTimeout> | undefined, disposed = false
 const pendingKey = 'qbot_upgrade_pending'
+function deferUpdate(event: MouseEvent) {
+  deferredVersion.value = info.value.latest_version
+  localStorage.setItem('qbot_deferred_update', info.value.latest_version)
+  event.target?.dispatchEvent(new Event('qbot-update-deferred', { bubbles: true }))
+}
 function clearPending() { localStorage.removeItem(pendingKey); localStorage.removeItem('qbot_upgrade_pending_since') }
 function schedule() { if (!disposed) timer = setTimeout(poll, 2000) }
 async function check(notify = false) {
@@ -70,10 +78,22 @@ async function poll() {
 async function install() {
   if (active.value || starting.value || !info.value.installable) return
   starting.value = true
+  const version = String(info.value.latest_version)
+  try {
+    await ElMessageBox.confirm(`确认升级到 v${version}？安装期间服务将短暂中断。`, '安装服务器更新', {
+      confirmButtonText: '开始升级',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    starting.value = false
+    return
+  }
+  if (disposed || active.value) { starting.value = false; return }
   const id = localStorage.getItem(pendingKey) || crypto.randomUUID()
   localStorage.setItem(pendingKey, id); localStorage.setItem('qbot_upgrade_pending_since', String(Date.now()))
   try {
-    const { data } = await api.post('/system/update/install', { version: info.value.latest_version, request_id: id })
+    const { data } = await api.post('/system/update/install', { version, request_id: id })
     job.value = data.job
     if (timer) clearTimeout(timer)
     await poll()

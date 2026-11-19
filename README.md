@@ -10,9 +10,9 @@
 
 <!-- github-release:start -->
 
-**[v1.4.11](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.4.11)** · 2026-11-17
+**[v1.4.12](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.4.12)** · 2026-11-18
 
-本版本聚焦管理台界面壳层多语言：界面可按浏览器或系统语言自动选择中文/English，也可手动切换并持久化。机器人消息处理、账号数据和 API 字段不随界面语言改写。
+本版本修复全新 PostgreSQL 部署无法启动的问题；Release 现在附带构建来源证明，原生升级服务会在安装前验证证明，管理台在线更新支持安装确认和按版本延后提醒。
 
 [全部发行记录](https://github.com/yuchen0x1/AI-QQ-Bot/releases)
 
@@ -59,6 +59,12 @@
    docker compose up -d --build          # 官方机器人接入
    docker compose ps
    docker compose logs -f backend
+   ```
+
+   使用自定义环境文件时，同时把它传给 Compose 的变量插值和服务 `env_file`：
+
+   ```bash
+   QBOT_ENV_FILE=/绝对路径/qbot.env docker compose --env-file /绝对路径/qbot.env up -d --build
    ```
 
    页面默认 `http://127.0.0.1:8080`；本地访问受限时通过 SSH 隧道或自行设置 TLS 代理。初始管理员账号/密码取自 `.env` 中的 `ADMIN_USERNAME` / `ADMIN_PASSWORD`，生产环境必须使用至少 12 位随机密码（不要使用 `admin123`），首次登录后请立即修改密码。
@@ -130,7 +136,7 @@ npm run build
 
 ## 在线更新与发布
 
-项目使用 GitHub Releases 作为在线版本源。管理台启动后会检查稳定版本，系统设置页可手动查看当前版本、Release、更新日志、发布资产和 SHA-256；Web 项目不会在浏览器内自动替换服务端文件。推送 `vMAJOR.MINOR.PATCH` 标签后，`.github/workflows/release.yml` 会运行测试、构建 Docker 镜像、打包源码并生成 `SHA256SUMS`，服务器按 `docs/AUTO_UPDATE.md` 校验后执行 Docker Compose 更新。
+项目使用 GitHub Releases 作为在线版本源。管理台启动后会检查稳定版本，系统设置页可手动查看当前版本、Release、更新日志、发布资产和 SHA-256；Web 项目不会在浏览器内自动替换服务端文件。推送 `vMAJOR.MINOR.PATCH` 标签后，`.github/workflows/release.yml` 会运行测试、Compose smoke、打包源码并生成 `SHA256SUMS` 与 `provenance.sigstore.json`；服务器按 [在线更新与发布](docs/AUTO_UPDATE.md) 校验后执行 Docker Compose 更新，原生升级服务还会验证构建来源证明。
 
 完整流程、Beta 通道、GitHub Actions、回滚和未配置代码签名的限制见 [docs/AUTO_UPDATE.md](docs/AUTO_UPDATE.md)。
 

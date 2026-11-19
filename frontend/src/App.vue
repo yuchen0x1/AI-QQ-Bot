@@ -19,9 +19,9 @@
       <header class="topbar">
         <el-button class="mobile-nav-toggle" circle text :aria-label="mobileNavOpen ? t('shell.closeNav') : t('shell.openNav')" aria-controls="primary-navigation" :aria-expanded="mobileNavOpen" @click="mobileNavOpen = !mobileNavOpen"><el-icon><Menu /></el-icon></el-button>
         <div class="crumb"><span>{{ t('shell.console') }}</span><el-icon><ArrowRight /></el-icon><strong>{{ currentTitle }}</strong></div>
-        <div class="top-actions"><div class="system-pill" :class="`socket-${socket.state.value}`"><span class="pulse-dot"></span>{{ socketLabel }}</div><el-button v-if="updateAvailable" type="warning" text @click="router.push('/settings')">{{ t('shell.newVersion') }} {{ latestVersion }}</el-button><el-tooltip :content="t('shell.refresh')"><el-button circle text @click="refreshKey++"><el-icon><Refresh /></el-icon></el-button></el-tooltip><label class="locale-picker"><span class="sr-only">{{ t('shell.locale') }}</span><select :value="localeSetting" :aria-label="t('shell.locale')" @change="changeLocale"><option value="auto">{{ t('shell.auto') }}</option><option value="zh-CN">{{ t('shell.chinese') }}</option><option value="en-US">{{ t('shell.english') }}</option></select></label><el-dropdown trigger="click" @command="handleUserCommand"><div class="user-chip"><el-avatar :size="32" class="user-avatar">{{ username.slice(0,1).toUpperCase() }}</el-avatar><span class="user-name">{{ username }}</span><el-icon><ArrowDown /></el-icon></div><template #dropdown><el-dropdown-menu><el-dropdown-item command="password">{{ t('shell.changePassword') }}</el-dropdown-item><el-dropdown-item command="logout" divided>{{ t('shell.logout') }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div>
+        <div class="top-actions"><div class="system-pill" :class="`socket-${socket.state.value}`"><span class="pulse-dot"></span>{{ socketLabel }}</div><el-button v-if="updateAvailable" type="warning" text @click="router.push('/settings#updates')">{{ t('shell.newVersion') }} {{ latestVersion }}</el-button><el-tooltip :content="t('shell.refresh')"><el-button circle text :aria-label="t('shell.refresh')" @click="refreshKey++"><el-icon><Refresh /></el-icon></el-button></el-tooltip><label class="locale-picker"><span class="sr-only">{{ t('shell.locale') }}</span><select :value="localeSetting" :aria-label="t('shell.locale')" @change="changeLocale"><option value="auto">{{ t('shell.auto') }}</option><option value="zh-CN">{{ t('shell.chinese') }}</option><option value="en-US">{{ t('shell.english') }}</option></select></label><el-dropdown trigger="click" @command="handleUserCommand"><div class="user-chip"><el-avatar :size="32" class="user-avatar">{{ username.slice(0,1).toUpperCase() }}</el-avatar><span class="user-name">{{ username }}</span><el-icon><ArrowDown /></el-icon></div><template #dropdown><el-dropdown-menu><el-dropdown-item command="password">{{ t('shell.changePassword') }}</el-dropdown-item><el-dropdown-item command="logout" divided>{{ t('shell.logout') }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div>
       </header>
-      <section class="page-wrap" :key="refreshKey"><router-view /></section>
+      <section class="page-wrap" :key="refreshKey" @qbot-update-deferred="updateAvailable = false"><router-view /></section>
       <footer class="page-footer"><span>{{ panelTitle }}</span><span class="footer-realtime"><i :class="`socket-led ${socket.state.value}`"></i>{{ socketLabel }} · {{ t('shell.footer') }}</span></footer>
     </main>
 
@@ -134,17 +134,28 @@ async function loadProfile() {
     guideVisible.value = !guide.data.progress?.seen && route.path !== '/help'
   } catch {}
 }
+let updateTimer: ReturnType<typeof setTimeout> | undefined
+let updateSession = 0
+function stopUpdateChecks() {
+  updateSession++
+  clearTimeout(updateTimer)
+  updateAvailable.value = false
+}
 async function checkForUpdateSilently() {
-  if (route.path === '/login') return
-  const last = Number(localStorage.getItem('qbot_update_checked_at') || 0)
-  const interval = 6 * 60 * 60 * 1000
-  if (last && Date.now() - last < interval) return
-  localStorage.setItem('qbot_update_checked_at', String(Date.now()))
+  if (route.path === '/login' || !userPermissions.value.some(p => p === '*' || p === 'system:view')) return
+  const session = ++updateSession
+  let interval = 5
   try {
     const { data } = await api.get('/system/update')
-    updateAvailable.value = Boolean(data?.update_available)
+    if (session !== updateSession) return
+    if (data.ok) interval = Number(data.check_interval_minutes) || 0
     latestVersion.value = String(data?.latest_version || '')
+    updateAvailable.value = interval > 0 && Boolean(data?.update_available)
+      && localStorage.getItem('qbot_deferred_update') !== latestVersion.value
   } catch {}
+  if (session === updateSession && interval > 0) {
+    updateTimer = setTimeout(checkForUpdateSilently, Math.min(interval * 60_000, 2_147_483_647))
+  }
 }
 onMounted(async () => {
   mobileQuery = window.matchMedia('(max-width: 768px)')
@@ -154,18 +165,19 @@ onMounted(async () => {
     if (data?.panel_title) panelTitle.value = String(data.panel_title)
   }).catch(() => {})
   await loadProfile()
-  await checkForUpdateSilently()
   startStatus()
+  void checkForUpdateSilently()
 })
 onBeforeUnmount(() => {
   mobileQuery?.removeEventListener('change', updateViewport)
   stopStatus()
+  stopUpdateChecks()
 })
-watch(() => route.path, (path, previousPath) => {
+watch(() => route.path, async (path, previousPath) => {
   mobileNavOpen.value = false
-  if (path === '/login') { userPermissions.value = []; stopStatus(); return }
-  if (previousPath === '/login' || !userPermissions.value.length) loadProfile()
-  if (previousPath === '/login') { startStatus(); checkForUpdateSilently() }
+  if (path === '/login') { userPermissions.value = []; stopStatus(); stopUpdateChecks(); return }
+  if (previousPath === '/login' || !userPermissions.value.length) await loadProfile()
+  if (previousPath === '/login') { startStatus(); void checkForUpdateSilently() }
 })
 
 async function handleUserCommand(command: string) {

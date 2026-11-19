@@ -7,7 +7,7 @@ QBot AI 在后台检测 GitHub 正式发布。原生 Linux 部署安装独立升
 1. GitHub Releases 作为稳定版本源。
 2. 管理台启动后按间隔检查 `/api/system/update`，设置页可手动检查。
 3. GitHub Actions 在 `main` 的 push / PR 上执行测试和 Docker 构建检查。
-4. 推送 `vMAJOR.MINOR.PATCH` 标签后，Actions 重新验证、打包源码、生成 SHA-256 清单并创建 GitHub Release。
+4. 推送 `vMAJOR.MINOR.PATCH` 标签后，Actions 重新验证、运行 Compose smoke、打包源码、生成 SHA-256 清单和 `provenance.sigstore.json`，再创建 GitHub Release。
 5. 原生部署使用后台「立即升级」；其他部署由管理员下载并校验 Release，执行对应的备份、升级、迁移和健康检查。
 
 ## 版本检查
@@ -58,7 +58,7 @@ UPDATE_CHECK_INTERVAL_MINUTES=360
    git push origin v1.1.1
    ```
 
-5. `release.yml` 会校验标签与前后端、锁文件版本一致且存在对应的更新说明；运行后端测试/Ruff、前端构建和两个 Docker 镜像构建，再生成源码、ZIP 上传包、带完整前端的 `qbot-ai-<version>-native.tar.gz` 升级包与 `SHA256SUMS`，最后使用对应版本的更新说明创建 Release。将附件下载到同一目录即可执行 `sha256sum -c SHA256SUMS`。
+5. `release.yml` 会校验标签与前后端、锁文件版本一致且存在对应的更新说明；复用 CI 运行后端测试/Ruff、前端构建和 Compose smoke，再生成源码、ZIP 上传包、带完整前端的 `qbot-ai-<version>-native.tar.gz` 升级包、`SHA256SUMS` 与 `provenance.sigstore.json`，最后使用对应版本的更新说明创建 Release。将附件下载到同一目录即可执行 `sha256sum -c SHA256SUMS`；原生升级服务还会用 GitHub CLI 验证 `native.tar.gz` 的构建来源证明。
 
 工作流不会覆盖已有 Release；同名标签的发布失败后应修复工作流或重新选择未占用版本号。正式发布仍需要维护者明确创建标签，不会因普通 push 自动发布。
 
@@ -72,10 +72,10 @@ Docker 部署示例：
 # 下载 Release 资产后，在隔离目录校验
 sha256sum -c SHA256SUMS
 
-# 备份、构建、迁移、重启并检查
+# 备份、构建、迁移、重启并检查；使用自定义环境文件时同时设置 QBOT_ENV_FILE
 ./backup.sh
-docker compose config --quiet
-docker compose up -d --build
+QBOT_ENV_FILE=/绝对路径/qbot.env docker compose --env-file /绝对路径/qbot.env config --quiet
+QBOT_ENV_FILE=/绝对路径/qbot.env docker compose --env-file /绝对路径/qbot.env up -d --build
 docker compose exec backend alembic upgrade head
 curl -f http://127.0.0.1:8080/api/system/health
 ```
@@ -84,7 +84,8 @@ curl -f http://127.0.0.1:8080/api/system/health
 
 ## 安全边界与已知限制
 
-- 当前发布资产使用 SHA-256 完整性校验；没有代码签名证书或发布私钥，因此不能声称完成 Windows/容器代码签名。
+- 发布资产使用 SHA-256 完整性校验；Release 同时附带由 GitHub Actions OIDC 生成的 Artifact Attestation，原生升级服务在解包前验证 `provenance.sigstore.json`。这不是 Windows/容器代码签名，Docker 镜像仍未签名。
+- 原生升级服务要求宿主机安装支持 `attestation verify`、`--source-ref` 和 `--custom-trusted-root` 的 GitHub CLI，并配置 `/etc/qbot/sigstore-trusted-root.jsonl`；缺少任一项时管理台会显示自动升级不可用，不会退回到仅校验 SHA-256 的安装路径。
 - GitHub Actions 使用仓库内置 `GITHUB_TOKEN`，不需要提交个人 Token。工作流不包含自动 SSH 生产部署，因为服务器地址、SSH 密钥和回滚策略尚未授权配置。
 - Release 检查依赖 GitHub API；API 不可访问时应用继续运行，但不会显示最新版本。
 - 原生安装由独立宿主机升级服务执行，普通网页进程不持有任意 shell / root 执行入口；没有安装升级服务的部署会明确显示不可用原因。

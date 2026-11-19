@@ -1,56 +1,56 @@
-# 竞品与相关开源项目对标
+# 竞品和开源实现调研
 
-审查日期：2026-11-16（Asia/Shanghai）
-项目：QBot AI 多账号智能 QQ 机器人管理平台
-仓库：<https://github.com/yuchen0x1/AI-QQ-Bot>
+2026-11-18（Asia/Shanghai）。通过 GitHub 仓库 API 和原始文件检查仓库元数据、默认分支提交、README、可读取的目录树、选定实现、近期 Issue 样本及 GitHub Latest Release。Star/Fork 为查询快照。活跃档位基于最后确认的提交时间，少数未返回提交的项目使用仓库推送时间。GitHub Latest 未返回时保留未知，项目仍可能通过标签或其他渠道分发。链接指向本轮取样的项目或代码。Issue 样本反映单个公开讨论，无法据此推断频次。若元数据未识别许可证，须逐文件复核后才可引入。
 
-## 研究方法与边界
+| # | 仓库 | 用途 | Star / Fork | 最近活动 | 最新 Release | SPDX / 语言 | 实现观察与证据 |
+|---|---|---|---|---|---|---|---|
+| 1 | [AstrBotDevs/AstrBot](https://github.com/AstrBotDevs/AstrBot) | 直接参考 | 47152 / 3614 | 2026-11-18 · ≤30 天 | 未取到 | AGPL-3.0 · Python | 独立 dashboard、平台接入和插件业务层。适合参考基于角色呈现运行状态。 [README](https://github.com/AstrBotDevs/AstrBot#readme) · [源码或配置](https://github.com/AstrBotDevs/AstrBot/blob/022959d856069805c01775b6859b34f212b3553c/astrbot/core/pipeline/scheduler.py) · [讨论样本](https://github.com/AstrBotDevs/AstrBot/issues/5949) |
+| 2 | [langbot-app/LangBot](https://github.com/langbot-app/LangBot) | 直接参考 | 19079 / 1713 | 2026-11-18 · ≤30 天 | [v4.11.8](https://github.com/langbot-app/LangBot/releases/tag/v4.11.8) | Apache-2.0 · Python | 多 IM 管理台和部署文档。适合参考首次连接流程，单独记录扩展权限。 [README](https://github.com/langbot-app/LangBot#readme) · 源码抓取未确认 · [讨论样本](https://github.com/langbot-app/LangBot/issues/1872) |
+| 3 | [nonebot/nonebot2](https://github.com/nonebot/nonebot2) | 直接参考 | 7789 / 659 | 2026-11-17 · ≤30 天 | 未取到 | MIT · Python | driver、adapter、plugin 解耦。参考无账号外部连接的适配器测试。 [README](https://github.com/nonebot/nonebot2#readme) · [源码或配置](https://github.com/nonebot/nonebot2/blob/a0ce84512ceaf4a45e51bc1119b8340d24506539/nonebot/internal/adapter/bot.py) · [Issues](https://github.com/nonebot/nonebot2/issues) |
+| 4 | [tencent-connect/botpy](https://github.com/tencent-connect/botpy) | 直接参考 | 916 / 135 | 2024-09-14 · >180 天 | 未取到 | MIT · Python | 官方 QQ Gateway、分发和心跳。参考异常关闭、会话恢复与官方能力对齐。 [README](https://github.com/tencent-connect/botpy#readme) · [源码或配置](https://github.com/tencent-connect/botpy/blob/e25f3e84bad7217357d8200a9d12939b58285b84/botpy/gateway.py) · [讨论样本](https://github.com/tencent-connect/botpy/issues/245) |
+| 5 | [GraiaProject/Ariadne](https://github.com/GraiaProject/Ariadne) | 直接参考 | 762 / 44 | 2024-08-27 · >180 天 | [v0.11.7](https://github.com/GraiaProject/Ariadne/releases/tag/v0.11.7) | AGPL-3.0 · Python | 应用层对消息事件和生命周期的组织。参考事件分类。 [README](https://github.com/GraiaProject/Ariadne#readme) · [源码或配置](https://github.com/GraiaProject/Ariadne/blob/5f96afd5a7655a3e2c44b06d54615413587180d2/src/graia/ariadne/app.py) · [讨论样本](https://github.com/GraiaProject/Ariadne/issues/192) |
+| 6 | [CMHopeSunshine/LittlePaimon](https://github.com/CMHopeSunshine/LittlePaimon) | 直接参考 | 1156 / 116 | 2025-03-06 · >180 天 | [v3.0.8](https://github.com/CMHopeSunshine/LittlePaimon/releases/tag/v3.0.8) | AGPL-3.0 · Python | 带控制台的机器人插件与更新流程。参考更新状态与运行环境检查。 [README](https://github.com/CMHopeSunshine/LittlePaimon#readme) · [源码或配置](https://github.com/CMHopeSunshine/LittlePaimon/blob/3b2e89fa66bd3a6254afae38538403844c83e02a/LittlePaimon/utils/update.py) · [讨论样本](https://github.com/CMHopeSunshine/LittlePaimon/issues/307) |
+| 7 | [KimigaiiWuyi/GenshinUID](https://github.com/KimigaiiWuyi/GenshinUID) | 直接参考 | 875 / 108 | 2026-11-15 · ≤30 天 | [GenshinUID2.0](https://github.com/KimigaiiWuyi/GenshinUID/releases/tag/GenshinUID2.0) | GPL-3.0 · Python | 按领域拆分插件和数据工具。参考备份前的业务边界。 [README](https://github.com/KimigaiiWuyi/GenshinUID#readme) · [源码或配置](https://github.com/KimigaiiWuyi/GenshinUID/blob/43c1a59762fcbf3894421b5e11fa06f4489b34f5/GenshinUID/genshinuid_check/backup_data.py) · [讨论样本](https://github.com/KimigaiiWuyi/GenshinUID/issues/638) |
+| 8 | [OlivOS-Team/OlivOS](https://github.com/OlivOS-Team/OlivOS) | 直接参考 | 252 / 34 | 2026-11-13 · ≤30 天 | [1.0.0](https://github.com/OlivOS-Team/OlivOS/releases/tag/1.0.0) | AGPL-3.0 · Python | 核心事件结构跨适配器复用。参考能力声明。 [README](https://github.com/OlivOS-Team/OlivOS#readme) · [源码或配置](https://github.com/OlivOS-Team/OlivOS/blob/f804c25953ecd4d958174bd2296c983fabe135f1/OlivOS/core/core/API.py) · [讨论样本](https://github.com/OlivOS-Team/OlivOS/issues/140) |
+| 9 | [lss233/kirara-ai](https://github.com/lss233/kirara-ai) | 直接参考 | 19293 / 1835 | 2026-10-22 · ≤30 天 | [v3.2.1](https://github.com/lss233/kirara-ai/releases/tag/v3.2.1) | AGPL-3.0 · Python | IM 与 LLM 适配器分离。参考平台关联配置按层解耦。 [README](https://github.com/lss233/kirara-ai#readme) · [源码或配置](https://github.com/lss233/kirara-ai/blob/36249e4a0aa8e3d8930acdfe4e14ec2be6484f63/kirara_ai/im/adapter.py) · [讨论样本](https://github.com/lss233/kirara-ai/issues/1524) |
+| 10 | [SK-415/HarukaBot](https://github.com/SK-415/HarukaBot) | 直接参考 | 860 / 111 | 2026-10-13 · 31–90 天 | [v1.6.0post5](https://github.com/SK-415/HarukaBot/releases/tag/v1.6.0post5) | AGPL-3.0 · Python | 面向群通知的订阅与定时投递。参考过滤、组管理和失败提示。 [README](https://github.com/SK-415/HarukaBot#readme) · 源码抓取未确认 · [讨论样本](https://github.com/SK-415/HarukaBot/issues/422) |
+| 11 | [fumingyang2004/Tulpa](https://github.com/fumingyang2004/Tulpa) | 直接参考 | 538 / 38 | 2026-10-24 · ≤30 天 | [v0.5.7](https://github.com/fumingyang2004/Tulpa/releases/tag/v0.5.7) | MIT · Python | 桌面与 Docker 验收文档。参考同一功能分别记录平台证据。 [README](https://github.com/fumingyang2004/Tulpa#readme) · [源码或配置](https://github.com/fumingyang2004/Tulpa/blob/6753a28a9757c93c0ad34ed54064965df2cb081c/doc/DOCKER_ACCEPTANCE.md) · [讨论样本](https://github.com/fumingyang2004/Tulpa/issues/7) |
+| 12 | [sansan0/TrendRadar](https://github.com/sansan0/TrendRadar) | 直接参考 | 63716 / 24923 | 2026-11-15 · ≤30 天 | 未取到 | GPL-3.0 · Python | 配置化订阅、聚合、过滤与推送。参考主题开关和投递流程。 [README](https://github.com/sansan0/TrendRadar#readme) · [源码或配置](https://github.com/sansan0/TrendRadar/blob/86584f5544c66d4e22132f9b87c44a7ea3a32fea/docker/docker-compose.yml) · [讨论样本](https://github.com/sansan0/TrendRadar/issues/95) |
+| 13 | [donbarbos/telegram-bot-template](https://github.com/donbarbos/telegram-bot-template) | 直接参考 | 480 / 82 | 2026-08-13 · 91–180 天 | 未取到 | MIT · Python | Compose 组合数据库、队列、管理端。参考启动门禁和真实依赖。 [README](https://github.com/donbarbos/telegram-bot-template#readme) · [源码或配置](https://github.com/donbarbos/telegram-bot-template/blob/cb027eb17e9812cf0411e1e8fc6492900a87ca93/docker-compose.yml) · [讨论样本](https://github.com/donbarbos/telegram-bot-template/issues/648) |
+| 14 | [countbot-ai/CountBot](https://github.com/countbot-ai/CountBot) | 直接参考 | 785 / 103 | 2026-11-17 · ≤30 天 | [v1.1.0](https://github.com/countbot-ai/CountBot/releases/tag/v1.1.0) | MIT · Python | 管理端 API 按队列、任务、权限分组。参考队列状态可观测性。 [README](https://github.com/countbot-ai/CountBot#readme) · [源码或配置](https://github.com/countbot-ai/CountBot/blob/6da645255d754197733699698b635ac3327a2ca2/backend/api/queue.py) · [讨论样本](https://github.com/countbot-ai/CountBot/issues/78) |
+| 15 | [SSmJaE/PepperBot](https://github.com/SSmJaE/PepperBot) | 直接参考 | 103 / 13 | 2023-08-16 · >180 天 | 未取到 | MIT · Python | 事件适配器与调度扩展分包。参考可选依赖和扩展入口。 [README](https://github.com/SSmJaE/PepperBot#readme) · [源码或配置](https://github.com/SSmJaE/PepperBot/blob/5658292c17c366be3520f984e37dc44413e97363/pepperbot/extensions/scheduler/__init__.py) · [讨论样本](https://github.com/SSmJaE/PepperBot/issues/5) |
+| 16 | [koishijs/koishi](https://github.com/koishijs/koishi) | 直接参考 | 6343 / 364 | 2026-10-08 · 31–90 天 | [4.18.11](https://github.com/koishijs/koishi/releases/tag/4.18.11) | MIT · TypeScript | 工作进程与守护程序分开。参考宿主机控制进程独立。 [README](https://github.com/koishijs/koishi#readme) · [源码或配置](https://github.com/koishijs/koishi/blob/97d5c395750cec37b772e0b94dc63c427e3bb868/packages/koishi/src/worker/daemon.ts) · [讨论样本](https://github.com/koishijs/koishi/issues/975) |
+| 17 | [satorijs/satori](https://github.com/satorijs/satori) | 直接参考 | 275 / 66 | 2026-10-07 · 31–90 天 | 未取到 | MIT · TypeScript | 统一消息模型和适配器。参考不同平台允许不同能力。 [README](https://github.com/satorijs/satori#readme) · [源码或配置](https://github.com/satorijs/satori/blob/db22bb3c22f8ee9f6d9d9ecf04fd58b70006956f/packages/core/src/adapter.ts) · [讨论样本](https://github.com/satorijs/satori/issues/398) |
+| 18 | [discord/discord-api-docs](https://github.com/discord/discord-api-docs) | 协议及 SDK | 6539 / 1392 | 2026-11-17 · ≤30 天 | [legacy-gamesdk](https://github.com/discord/discord-api-docs/releases/tag/legacy-gamesdk) | CC-BY-SA-4.0 · MDX | 官方 Gateway 文档明确重连、恢复、分片。参考连接状态和用户文档。 [README](https://github.com/discord/discord-api-docs#readme) · [源码或配置](https://github.com/discord/discord-api-docs/blob/76e1eef5145582fced5262e71afe6d448e48a3c5/developers/events/gateway.mdx) · [讨论样本](https://github.com/discord/discord-api-docs/issues/5558) |
+| 19 | [python-telegram-bot/python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) | 协议及 SDK | 29601 / 6189 | 2026-11-11 · ≤30 天 | [v22.8](https://github.com/python-telegram-bot/python-telegram-bot/releases/tag/v22.8) | GPL-3.0 · Python | 独立的 PyPI 发布工作流。参考分阶段验证与构建来源。 [README](https://github.com/python-telegram-bot/python-telegram-bot#readme) · [源码或配置](https://github.com/python-telegram-bot/python-telegram-bot/blob/41e3633bd1b4e51693ee57059828a59a9773618a/.github/workflows/release_pypi.yml) · [讨论样本](https://github.com/python-telegram-bot/python-telegram-bot/issues/5261) |
+| 20 | [aiogram/aiogram](https://github.com/aiogram/aiogram) | 协议及 SDK | 5947 / 977 | 2026-11-17 · ≤30 天 | [v3.32.0](https://github.com/aiogram/aiogram/releases/tag/v3.32.0) | MIT · Python | Bot 客户端和 API 方法模型。参考可替换 transport 及 typed API。 [README](https://github.com/aiogram/aiogram#readme) · [源码或配置](https://github.com/aiogram/aiogram/blob/63d09d6310072179af8419dfd93a5c51bb8ceea1/aiogram/client/bot.py) · [Issues](https://github.com/aiogram/aiogram/issues) |
+| 21 | [serenity-rs/serenity](https://github.com/serenity-rs/serenity) | 协议及 SDK | 5662 / 673 | 2026-11-14 · ≤30 天 | [v0.12.5](https://github.com/serenity-rs/serenity/releases/tag/v0.12.5) | ISC · Rust | Rust Gateway WebSocket 生命周期。参考独立连接层测试。 [README](https://github.com/serenity-rs/serenity#readme) · [源码或配置](https://github.com/serenity-rs/serenity/blob/215142c17fc1d95f0d590a574717cfbbfe2c0ac1/src/gateway/ws.rs) · [讨论样本](https://github.com/serenity-rs/serenity/issues/1462) |
+| 22 | [Rapptz/discord.py](https://github.com/Rapptz/discord.py) | 协议及 SDK | 16211 / 3896 | 2026-09-01 · 31–90 天 | 未取到 | MIT · Python | Gateway 与 Webhook 模块独立。参考显式事件订阅。 [README](https://github.com/Rapptz/discord.py#readme) · [源码或配置](https://github.com/Rapptz/discord.py/blob/65232c38702be5844cf2ce865a4777eb1928b5d0/discord/gateway.py) · [讨论样本](https://github.com/Rapptz/discord.py/issues/1094) |
+| 23 | [slackapi/bolt-python](https://github.com/slackapi/bolt-python) | 协议及 SDK | 1336 / 299 | 2026-11-17 · ≤30 天 | [v1.30.0](https://github.com/slackapi/bolt-python/releases/tag/v1.30.0) | MIT · Python | 同步和异步 Web 框架适配。参考保持业务层跨传输统一。 [README](https://github.com/slackapi/bolt-python#readme) · [源码或配置](https://github.com/slackapi/bolt-python/blob/138cf857169d4019470e0c6ff4a29a4589d1a20d/slack_bolt/adapter/asgi/async_handler.py) · [讨论样本](https://github.com/slackapi/bolt-python/issues/380) |
+| 24 | [matrix-org/matrix-hookshot](https://github.com/matrix-org/matrix-hookshot) | 协议及 SDK | 464 / 101 | 2026-11-11 · ≤30 天 | [7.6.2](https://github.com/matrix-org/matrix-hookshot/releases/tag/7.6.2) | Apache-2.0 · TypeScript | 桥接服务和外部 API。参考最小授权及桥接配置。 [README](https://github.com/matrix-org/matrix-hookshot#readme) · [源码或配置](https://github.com/matrix-org/matrix-hookshot/blob/18312dc6dda798ac158832e5d6379707364ea437/src/api/index.ts) · [讨论样本](https://github.com/matrix-org/matrix-hookshot/issues/844) |
+| 25 | [louislam/uptime-kuma](https://github.com/louislam/uptime-kuma) | 运维及编排 | 94593 / 8869 | 2026-11-18 · ≤30 天 | [2.5.12](https://github.com/louislam/uptime-kuma/releases/tag/2.5.12) | MIT · JavaScript | 后台监控、状态页与登录模块。参考故障态和移动页面。 [README](https://github.com/louislam/uptime-kuma#readme) · [源码或配置](https://github.com/louislam/uptime-kuma/blob/9ea6750c1971454a09dbd8f7f8a879b2f08ecc53/server/auth.ts) · [讨论样本](https://github.com/louislam/uptime-kuma/issues/275) |
+| 26 | [containrrr/watchtower](https://github.com/containrrr/watchtower) | 运维及编排 | 24582 / 1158 | 2025-12-17 · >180 天 · 已归档 | [v1.7.1](https://github.com/containrrr/watchtower/releases/tag/v1.7.1) | Apache-2.0 · Go | 容器更新生命周期依赖 Docker 控制面。保留管理员可控更新。 [README](https://github.com/containrrr/watchtower#readme) · [源码或配置](https://github.com/containrrr/watchtower/blob/ca0e86e824ec05389ab972ea97d04d4bf0476e90/pkg/container/client.go) · [讨论样本](https://github.com/containrrr/watchtower/issues/1060) |
+| 27 | [gethomepage/homepage](https://github.com/gethomepage/homepage) | 运维及编排 | 33724 / 2175 | 2026-11-18 · ≤30 天 | [v2.8.0](https://github.com/gethomepage/homepage/releases/tag/v2.8.0) | GPL-3.0 · JavaScript | Docker 文档强调整体配置及访问边界。参考 NAS/私有仪表盘的浏览器入口。 [README](https://github.com/gethomepage/homepage#readme) · [源码或配置](https://github.com/gethomepage/homepage/blob/65ebc6abd321233bfa0aed382565221c359759bb/docs/installation/docker.md) · [Issues](https://github.com/gethomepage/homepage/issues) |
+| 28 | [node-red/node-red](https://github.com/node-red/node-red) | 运维及编排 | 23856 / 4033 | 2026-11-17 · ≤30 天 | [5.0.10](https://github.com/node-red/node-red/releases/tag/5.0.10) | Apache-2.0 · JavaScript | 集中编排 Node 包发布。参考独立发布任务、版本检查及可重复流程。 [README](https://github.com/node-red/node-red#readme) · [源码或配置](https://github.com/node-red/node-red/blob/f613ba109eff360a1c8f8cb9add7b39531c75f12/scripts/release/index.js) · [讨论样本](https://github.com/node-red/node-red/issues/3836) |
+| 29 | [langgenius/dify](https://github.com/langgenius/dify) | 运维及编排 | 161423 / 25521 | 2026-11-18 · ≤30 天 | [1.20.0](https://github.com/langgenius/dify/releases/tag/1.20.0) | NOASSERTION · Python | 独立 Web 管理端、API、worker。参考依赖就绪、连接与编排拆分。 [README](https://github.com/langgenius/dify#readme) · [源码或配置](https://github.com/langgenius/dify/blob/65cc7250fb9171eb87bb0867beb0996b8a8cadcc/api/app.py) · [Issues](https://github.com/langgenius/dify/issues) |
+| 30 | [FlowiseAI/Flowise](https://github.com/FlowiseAI/Flowise) | 运维及编排 | 55576 / 25091 | 2026-08-13 · 91–180 天 · 已归档 | [flowise@3.1.4](https://github.com/FlowiseAI/Flowise/releases/tag/flowise%403.1.4) | NOASSERTION · TypeScript | Compose 的队列部署示例。参考功能可选时清楚描述外部依赖。 [README](https://github.com/FlowiseAI/Flowise#readme) · [源码或配置](https://github.com/FlowiseAI/Flowise/blob/9291856d1ea4a4ceea9f8fef8ce14f4f6c81e8eb/docker/docker-compose-queue-prebuilt.yml) · [讨论样本](https://github.com/FlowiseAI/Flowise/issues/2557) |
+| 31 | [n8n-io/n8n](https://github.com/n8n-io/n8n) | 运维及编排 | 210883 / 61558 | 2026-11-18 · ≤30 天 | [n8n@2.48.5](https://github.com/n8n-io/n8n/releases/tag/n8n%402.48.5) | NOASSERTION · TypeScript | 任务队列支持 worker 并区分触发位置。参考独立 worker 边界。 [README](https://github.com/n8n-io/n8n#readme) · [源码或配置](https://github.com/n8n-io/n8n/blob/c3b98e6b65e8e5ca3634ffeb65828ad21606a74c/packages/cli/src/scaling/scaling.service.ts) · [Issues](https://github.com/n8n-io/n8n/issues) |
+| 32 | [go-gitea/gitea](https://github.com/go-gitea/gitea) | 运维及编排 | 59151 / 7415 | 2026-11-18 · ≤30 天 | [v28.4.0](https://github.com/go-gitea/gitea/releases/tag/v28.4.0) | MIT · Go | rootless 容器定义。参考运行身份与目录所有权。 [README](https://github.com/go-gitea/gitea#readme) · [源码或配置](https://github.com/go-gitea/gitea/blob/fbf986d1c7ba1b0ad0078105b3adb0a73b769295/Dockerfile.rootless) · [讨论样本](https://github.com/go-gitea/gitea/issues/4898) |
+| 33 | [crazy-max/diun](https://github.com/crazy-max/diun) | 运维及编排 | 5112 / 163 | 2026-11-18 · ≤30 天 | [v4.33.1](https://github.com/crazy-max/diun/releases/tag/v4.33.1) | MIT · Go | 只通知镜像版本变化的运维路径。参考提示和执行可分别授权。 [README](https://github.com/crazy-max/diun#readme) · [源码或配置](https://github.com/crazy-max/diun/blob/8b678d0badde27d2a436ba7400b35f6954f7c587/pkg/docker/service.go) · [讨论样本](https://github.com/crazy-max/diun/issues/263) |
 
-本轮通过 GitHub 仓库搜索、仓库元数据、README、目录树、依赖/许可证信息和重点项目源码入口进行筛选。共筛选 15 个相关项目；对 AstrBot、LangBot、NoneBot2、botpy、telegram-bot-template 做了较深的架构/源码入口核对，其余项目完成仓库、README、许可证与定位筛选。GitHub 共享 API 对部分仓库的最新提交历史触发了速率限制，因此未把无法可靠获取的更新时间写成事实。
+## 功能差距与采用决定
 
-研究结论只用于架构取舍和路线规划，没有复制 GPL/AGPL 项目代码，也没有引入未完成许可证核查的依赖。
-
-## 15 个研究项目
-
-| 项目 | 许可证 | 重点能力/实际参考 | 对本项目的结论 |
+| 项目 | QBot AI 现状 | 对照和设计 | 本轮决定 |
 |---|---|---|---|
-| [AstrBot](https://github.com/AstrBotDevs/AstrBot) | AGPL-3.0 | AI Agent、多 IM、插件、Dashboard、Docker；仓库元数据显示 2026-11-16 仍有提交 | 学习插件生命周期、Agent 与管理端边界；不直接移植 AGPL 代码 |
-| [LangBot](https://github.com/langbot-app/LangBot) | AGPL-3.0 | 多 IM Agent、插件、技能、Web 管理端、任务编排 | 学习平台/插件/技能分层和任务可观测性；先做权限与隔离 |
-| [NoneBot2](https://github.com/nonebot/nonebot2) | MIT | driver、adapter、plugin 解耦，异步事件模型 | 保持官方 QQ adapter 与 bot engine 边界，能力按协议声明 |
-| [botpy](https://github.com/tencent-connect/botpy) | MIT | QQ 官方机器人 Gateway、事件、API、示例和测试 | 作为官方 QQ 协议边界参考，不恢复个人 QQ 模拟登录 |
-| [Ariadne](https://github.com/GraiaProject/Ariadne) | AGPL-3.0 | QQ 自动化、事件和消息抽象 | 借鉴事件模型与扩展边界，不复制实现 |
-| [LittlePaimon](https://github.com/CMHopeSunshine/LittlePaimon) | GPL-3.0 | NoneBot2 插件、群管理、功能插件 | 学习群管理插件组织方式；许可证不适合直接合入 |
-| [GenshinUID](https://github.com/KimigaiiWuyi/GenshinUID) | 需按仓库当前文件复核 | 多适配器插件生态和领域功能 | 参考插件配置与领域模块拆分，暂不引入代码 |
-| [OlivOS](https://github.com/OlivOS-Team/OlivOS) | MIT | 跨平台互动栈、事件和适配器 | 参考多协议能力声明和事件标准化 |
-| [kirara-ai](https://github.com/lss233/kirara-ai) | 需按仓库当前文件复核 | 多平台、多模态 AI Bot | 参考 Provider/平台解耦，保留本项目官方 QQ 定位 |
-| [HarukaBot](https://github.com/SK-415/HarukaBot) | AGPL-3.0 | 定时推送、订阅和 NoneBot2 插件 | 学习推送任务的失败重试和订阅表达，不复制代码 |
-| [Tulpa](https://github.com/fumingyang2004/Tulpa) | 需按仓库当前文件复核 | MCP 与 IM 桥接 | 仅吸收 MCP 工具权限、配额、审计的设计方向 |
-| [TrendRadar](https://github.com/sansan0/TrendRadar) | GPL-3.0 | 信息聚合、AI 过滤、多渠道推送、MCP | 参考过滤、摘要、渠道投递链路；许可证不直接合入 |
-| [telegram-bot-template](https://github.com/donbarbos/telegram-bot-template) | MIT | PostgreSQL、Redis、Docker、后台、Prometheus/Grafana、CI | 对照 Compose、健康检查、迁移、可观测性交付 |
-| [CountBot](https://github.com/countbot-ai/CountBot) | 需按仓库当前文件复核 | Agent 与多 IM 连接器 | 参考 Agent 连接器边界，先完成工具权限模型 |
-| [PepperBot](https://github.com/SSmJaE/PepperBot) | 需按仓库当前文件复核 | Python Bot、插件和消息事件 | 作为轻量插件/事件实现的补充样本 |
+| 应用交付 | Web 管理台、Compose、Linux systemd、三个发布包 | Docker 项目验证部署组合与真实依赖。Pip/Node 项目把构建和发布职责拆开。 | A。把 PostgreSQL、Redis、Nginx 和真实登录纳入每次 CI 与稳定版门禁。 |
+| 更新真实性 | 正式资产原先由 HTTPS 与 SHA-256 校验 | GitHub Artifact Attestations 以 OIDC 绑定构建仓库、工作流及标签；真正的更新器应在解包之前完成身份和哈希验证。 | A。发布包与校验清单加签，原生宿主机以 GitHub CLI 验证。 |
+| 更新交互 | 第一次查看后以固定六小时抑制提醒；状态位于设置页 | Uptime Kuma 的运维入口和通知项目的版本发现流程可参考。 | A。支持版本级稍后提醒、配置检查间隔和明确的重启确认。 |
+| 平台能力 | 官方 QQ 权限决定可用事件及管理动作 | botpy、discord-api-docs、NoneBot 分别给出平台能力、连接生命周期和适配器隔离的样本。 | B。保持能力边界。持久化消息幂等和横向调度待专门设计。 |
+| 插件/AI 扩展 | 受信 Python 插件、多个 AI Provider | AstrBot、LangBot、Dify、Flowise 的扩展与 worker 边界。 | B。列入长期升级清单，待隔离、授权和成本验证。 |
+| Web 运维导航 | Vue 路由、桌面边栏和移动抽屉 | Homepage、Uptime Kuma 的快速入口、明确状态及相邻动作。 | B。顶栏提示直达更新，保留可访问的移动入口与版本状态。 |
+| 托管/分发 | 管理台运行需要自有服务；展示站与后台分离 | Compose 和原生服务器适合长时间运行，Watchtower 类自动替换容器涉及高权限。 | C。Compose 保留管理员触发，暂不引入 Docker Socket 更新服务。 |
+| 桌面、应用商店与离线 | 机器人由服务端主动收发、维护长期连接和签名回调 | 客户端只需实时管理入口，手机休眠和商店签名会提高成本。 | C/D。继续优化响应式管理台，平台限制见兼容矩阵。 |
 
-## 对标结论
+近期技术优先复核本表的近 30/90/180 天活动与最新 Release 链接。对本轮产生直接影响的是签名来源的 [GitHub 官方验证政策](https://cli.github.com/manual/gh_attestation_verify)，以及镜像中实际出现的 [Picomatch 安全修复](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)。商业产品或非 GitHub 镜像的动态只作为待研究来源。本轮没有引入第三方源代码和素材，保留现有项目许可证。50 项有依据的升级候选见 [升级路线图](UPGRADE_ROADMAP.md)。
 
-| 维度 | 参考项目共同优势 | QBot AI 当前实际情况 | 取舍 |
-|---|---|---|---|
-| 核心功能 | 成熟项目通常把 adapter、事件、插件、任务拆开 | 已有官方 QQ WebSocket/Webhook、账号隔离、AI、GitHub、任务和插件 | 保持现有模块边界，补持久化去重和分布式调度 |
-| 用户体验 | Dashboard 有清晰的失败、重试、空状态和首次引导 | 已有六步新手指引、响应式控制台；部分通用列表此前吞掉加载错误 | 本轮补 ResourceView/Dashboard 错误重试；继续做权限可见性和移动端验收 |
-| UI 设计 | 生态项目更重视插件/任务状态和可观测性 | 深色控制台、实时状态和图表已具备；主包约 1.15 MB | 保留视觉语言，下一步做 bundle budget、可访问性和按需组件 |
-| 技术架构 | NoneBot/LangBot 强调可扩展边界；模板项目强调 Compose/迁移/监控一体化 | FastAPI、SQLAlchemy async、Alembic、PostgreSQL/SQLite、Redis、Vue 3 | 不更换技术栈，补跨实例租约、事件去重、共享限流 |
-| 性能 | 大项目使用异步事件、按需加载、指标监控 | ECharts 已异步拆 chunk；后端有并发限制和事件广播 | 继续做前端树摇、分页查询、队列背压和指标 |
-| 安全 | 成熟项目逐步加入签名、权限、审计和隔离 | JWT 会话、TOTP、RBAC、加密、限流、签名和 SSRF 基础控制已存在 | 本轮移除浏览器 localStorage JWT、Gitee URL Token、限制 Webhook 体积；签名发布/DNS rebinding 仍待完成 |
-| 稳定性 | 任务重试、幂等、恢复演练和可观测性是成熟项目的共性 | 已有重试、备份、更新器、Redis 事件；QQ 去重仍主要在内存 | 优先做持久化消息去重、调度租约和恢复演练 |
-| 工程化 | CI、容器、依赖审计、SBOM、签名发布较完整 | CI/release 已有测试、构建、Docker 和 SHA-256 | 本轮补 pip check、compileall、Compose 校验、依赖审查和校验和自检；签名/SBOM 待补 |
-
-## 我们的优势与短板
-
-**优势**：官方 QQ 接入边界明确；多账号隔离、群/消息/申请/推送记录、GitHub OAuth、AI Provider、TOTP、RBAC、审计、迁移、在线更新和中文首次引导已经形成一体化管理台；项目保持 MIT 许可和较完整的本地测试。
-
-**短板**：跨实例调度与消息幂等还没有数据库级保证；插件仍是受信 Python 代码；更新包只有校验和没有签名证明；生产 Docker、真实 QQ/GitHub Webhook、AI Provider 和 TLS 端到端证据不能由本地测试替代；前端错误反馈和 bundle 预算仍需继续改进。
-
-## 可借鉴技术的许可证决策
-
-- 直接采用：MIT 项目的公开接口思想、协议文档和独立概念，重新实现并保留来源记录。
-- 局部重实现：adapter/driver 解耦、任务状态机、通知重试、健康检查、插件指标和权限审计。
-- 暂不采用：AGPL/GPL 项目的代码复制；未经许可证核验的依赖；需要改变官方 QQ 定位的个人账号模拟登录。
+每次大的版本更新从本表复查活动、发布、公开问题和选定实现。若发现变更，在 PR 中附链接、兼容性和本地验证。小版本可沿用当前证据并补充与差异直接相关的项目。

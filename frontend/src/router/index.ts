@@ -2,6 +2,9 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const router = createRouter({
   history: createWebHistory(),
+  scrollBehavior(to, _from, savedPosition) {
+    return savedPosition || (to.hash === '#updates' ? { el: '#updates', top: 80 } : { top: 0 })
+  },
   routes: [
     { path: '/login', name: 'login', component: () => import('../views/LoginView.vue'), meta: { public: true } },
     { path: '/', component: () => import('../views/DashboardView.vue'), meta: { title: '仪表盘', icon: 'DataBoard', permission: 'account:view' } },

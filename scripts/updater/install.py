@@ -16,6 +16,13 @@ def main():
     if not current.is_relative_to(root / "releases") or not (current / "backend/app/main.py").is_file():
         raise SystemExit("Expected an existing /opt/qbot native installation")
     repository = Path(__file__).resolve().parents[2]
+    gh = shutil.which("gh", path="/usr/local/bin:/usr/bin")
+    root_bundle = Path("/etc/qbot/sigstore-trusted-root.jsonl")
+    if not gh or not root_bundle.is_file():
+        raise SystemExit("Install GitHub CLI and provision /etc/qbot/sigstore-trusted-root.jsonl first.")
+    help_result = subprocess.run([gh, "attestation", "verify", "--help"], capture_output=True, text=True)
+    if help_result.returncode or "--source-ref" not in help_result.stdout or "--custom-trusted-root" not in help_result.stdout:
+        raise SystemExit("Update GitHub CLI to a version that supports attestation verification.")
     pointer = Path("/var/lib/qbot-updater/current.json")
     if pointer.exists():
         ident = str(UUID(json.loads(pointer.read_text())["id"]))

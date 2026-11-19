@@ -1,10 +1,10 @@
 # PROJECT_AUDIT
 
-审计日期：2026-11-16（Asia/Shanghai）
-仓库：`E:\移动云盘同步盘\AI-QQ Bot`
+审计日期：2026-11-19（Asia/Shanghai）
+仓库：`E:\移动云盘同步盘\QQ 机器人管理台`
 分支：`main`
-HEAD：`f03de58 docs(test): v1.4.7 发布记录回填`
-应用版本：后端 `1.4.7`，前端 `1.4.7`
+HEAD：`9dde09f docs: align project information with published releases [skip ci]`
+应用版本：后端 `1.4.12`，前端 `1.4.12`
 
 ## 1. 项目定位
 
@@ -58,7 +58,7 @@ QBot AI 是面向 Linux 服务器的多账号 QQ 机器人管理平台。它把 
 - 多副本 scheduler 没有统一租约，连接绑定任务不能简单交给独立 worker；需要分布式调度锁和明确的 owner。
 - WebSocket ticket 文档称一次性，但当前只做短时签名和会话复核，没有持久化消费标记。
 - 插件是动态 Python 代码，权限上下文是约束接口而不是沙箱；不应加载不受信插件。
-- Release 只有 SHA-256，没有签名、SBOM、SLSA/provenance 或容器签名。
+- Release 已增加 GitHub Actions Artifact Attestation 和原生升级前验证；SBOM、容器签名及真实主机验收仍未完成。
 - Docker 基础镜像、apt 包和 Agent Mail CLI 仍未全部按 digest/lock 固定。
 - Cookie 登录已经不再写入浏览器 localStorage，但登录/改密响应仍保留 `access_token` 以兼容 API 客户端；后续可增加浏览器专用不返回令牌的登录响应和 CSRF 防护。
 
@@ -66,10 +66,10 @@ QBot AI 是面向 Linux 服务器的多账号 QQ 机器人管理平台。它把 
 
 | 检查 | 结果 |
 |---|---|
-| `backend/.venv/Scripts/python.exe -m pytest -o addopts='' -q --tb=short` | PASS：230 passed，1 skipped |
-| `backend/.venv/Scripts/python.exe -m ruff check app tests migrations` | PASS：All checks passed |
-| `backend/.venv/Scripts/python.exe -m compileall -q app tests migrations` | PASS |
-| `npm run build`（frontend） | PASS：vue-tsc + Vite，2382 modules transformed |
+| `backend` pytest | BLOCKED：当前工作区未提供 `.venv`，系统 Python 未安装 pytest |
+| `backend` Ruff | BLOCKED：当前工作区未提供 `.venv`，系统 Python 未安装 ruff |
+| `backend` compileall + `prepare_release.py --tag v1.4.12` | PASS |
+| `npm run build`（frontend） | PASS：vue-tsc + Vite，2383 modules transformed |
 | `docker compose --env-file .env.example config --no-env-resolution --quiet` | PASS |
 | `git diff --check` | PASS；仅有 Windows LF/CRLF 转换提示 |
 | Docker 实际构建/启动 | BLOCKED：本机 Docker Desktop Linux daemon 不可用 |
@@ -77,7 +77,7 @@ QBot AI 是面向 Linux 服务器的多账号 QQ 机器人管理平台。它把 
 
 ## 6. 成熟度判断
 
-当前属于“可持续迭代的内部/小规模生产平台”，不是已经完成所有生产级证明的产品。核心业务链路、数据迁移、本地隔离测试和发布脚本较完整；生产级缺口集中在多副本一致性、事件持久化幂等、外部服务端到端证据、发布真实性和插件隔离。
+当前属于“可持续迭代的内部/小规模生产平台”，不是已经完成所有生产级证明的产品。核心业务链路、数据迁移、本地隔离测试和发布脚本较完整；生产级缺口集中在多副本一致性、事件持久化幂等、外部服务端到端证据、SBOM/容器签名和插件隔离。
 
 ## 7. 下一步重点
 

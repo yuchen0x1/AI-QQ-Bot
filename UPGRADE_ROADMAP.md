@@ -11,7 +11,7 @@
 | EV-004 | SQLite 一致性备份 / 数据 | 复制活动文件可能丢 WAL 一致性 | SQLite online backup API | 在线备份、临时文件、原子替换 | `backend/app/services/backup.py` | 中 | P0 | 并发写入后备份可打开，替换中断不覆盖旧备份 | 已完成 |
 | EV-005 | 更新器损坏状态保护 / 更新 | pointer/job JSON 损坏会崩溃 | 原生 updater 状态机/隔离状态文件 | 校验 JSON、UUID 和 id，报告错误并阻止新安装 | `scripts/updater/daemon.py` | 低 | P0 | 损坏状态可查询、无异常泄漏、安装请求被拒绝 | 已完成 |
 | EV-006 | Forwarded header 信任边界 / 部署 | Uvicorn 信任任意对端 | 反向代理只信任明确边界 | Uvicorn 只启用 loopback forwarded headers；应用层用 CIDR 校验 Compose 代理的客户端 IP | `backend/Dockerfile`, `backend/app/core/config.py` | 低 | P0 | 生成容器命令不含 `*`，应用层代理网段校验通过 | 已完成 |
-| EV-007 | Release 签名与 provenance / 发布 | SHA-256 只能发现损坏，不能证明来源 | Sigstore/cosign、SLSA | 签名 manifest、OIDC provenance、容器签名 | `.github/workflows/release.yml`, `SECURITY.md` | 中 | P0 | 客户端校验签名失败即拒绝安装；Release 带 SBOM/provenance | 计划 |
+| EV-007 | Release 签名与 provenance / 发布 | SHA-256 只能发现损坏，不能证明来源 | Sigstore/cosign、SLSA | GitHub Actions OIDC provenance、原生升级器安装前验证；SBOM 与容器签名另行补齐 | `.github/workflows/release.yml`, `scripts/updater`, `SECURITY.md` | 中 | P0 | Release 带 provenance；原生客户端校验失败即拒绝安装；真实 Release/主机链路仍需验收 | 部分完成 |
 | EV-008 | SSRF DNS 固定解析 / 安全 | 校验后请求时可能 DNS rebinding | 出站代理/固定解析/网络隔离 | 解析并固定目标地址，禁用不安全重定向，配合 egress ACL | `backend/app/services/alerting.py`, `core/http.py` | 高 | P0 | 公网域名重绑定到私网时请求被阻断；重定向重新校验 | 计划 |
 | EV-009 | 推送规则群字段 / 核心功能 | UI 用 `qq_group_display`，API 需要 `qq_group` | 管理端表单 payload 与展示字段分离 | 用 `qq_group` 绑定，保留 display 字段只用于表格 | `frontend/src/views/PushRulesView.vue` | 低 | P1 | 新建/编辑 payload 通过后端校验，切换账号清除旧群 | 已完成 |
 | EV-010 | 自动禁言到期状态 / 稳定性 | `muted_until` 被写成当前时间 | 群管理系统持久化真实动作期限 | 按 verdict.duration 写入到期时间，修复状态显示/重复管理 | `backend/app/services/bot_engine.py` | 低 | P1 | 120 秒场景剩余时间在 90~150 秒，adapter ban 仍调用 | 已完成 |
@@ -58,6 +58,6 @@
 
 ## 执行顺序
 
-1. 先完成 EV-007、008、013、015、016、017、019，解决真实性、SSRF、幂等和多副本风险。
+1. 先完成 EV-008、013、015、016、017、019，解决 SSRF、幂等和多副本风险；EV-007 继续补真实 Release、主机验证和 SBOM/容器签名证据。
 2. 再完成 EV-029、030、031、033、034、039，把已有后端能力变成可操作、可观测的管理台。
 3. 最后完成 EV-035、037、040、041、042、043、044、045、046、048、049、050，并把真实外部环境验收接入发布闸门。

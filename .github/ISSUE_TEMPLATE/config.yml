@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 私密报告安全漏洞
+    url: https://github.com/yuchen0x1/AI-QQ-Bot/security/policy
+    about: 按安全政策中的私密渠道报告。

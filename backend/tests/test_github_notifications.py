@@ -243,9 +243,17 @@ async def test_star_from_webhook_and_poll_is_delivered_once(client, admin_header
     assert len(star_messages) == 1
 
 
-async def test_channel_agnostic_identity_matches_between_sources():
+async def test_channel_agnostic_identity_matches_between_sources(monkeypatch):
     """同一次 Star / Fork / 分支增删，两条通道算出的去重键必须相同。"""
-    from app.services.github.activity import normalize_activity
+    from app.services.github import activity
+
+    class EventClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 17, 2, 5, 44, tzinfo=tz)
+
+    monkeypatch.setattr(activity, "datetime", EventClock)
+    normalize_activity = activity.normalize_activity
 
     repo = GithubRepository(id=42, owner="notifier", name="identity", full_name="notifier/identity",
                             html_url="https://github.com/notifier/identity", default_branch="main")

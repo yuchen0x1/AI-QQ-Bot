@@ -61,12 +61,34 @@ sudo systemctl restart qbot
 
 此脚本保留现有环境配置并增加升级服务地址，保存配置与 Nginx 原件；创建独立构建用户及 `qbot-updater.service`。后端服务改用当前发布目录内的 `.venv`；旧部署原有虚拟环境通过符号链接继续使用。请先核对目录布局并备份。
 
-之后在后台检查更新，发现带 `native.tar.gz` 升级包的正式版本时点击「立即升级」。下载、校验和运行环境准备期间旧版本继续工作；切换前暂停外部 API、停止机器人服务并备份数据库。新版本通过启动检查后恢复写入与推送，网页自动刷新。检查失败会恢复旧版本和升级前的数据；升级记录仍保留。
+之后在后台检查更新，发现同时带 `native.tar.gz` 和 `provenance.sigstore.json` 的正式版本时点击「立即升级」。下载、SHA-256 校验和构建来源验证期间旧版本继续工作；切换前暂停外部 API、停止机器人服务并备份数据库。新版本通过启动检查后恢复写入与推送，网页自动刷新。检查失败会恢复旧版本和升级前的数据；升级记录仍保留。
 
 - 升级状态与日志：`/var/lib/qbot-updater/jobs/`，root 专用目录。
 - 升级前数据库备份：`/var/lib/qbot-updater/backups/upgrade-<任务标识>.db`，由 root 独占，与应用数据及应用用户可写的日常备份目录分开保存。
 - 升级服务仅通过 `/run/qbot-updater/control.sock` 接收后台管理员发起的请求，没有公网管理端口；网页只能提供版本号与请求标识，不能提供下载地址、命令或路径。
-- 包只从 root 配置的 GitHub 仓库最新正式发布获取，并按 GitHub 的 SHA-256 digest 校验。服务器位于中国大陆时，可在该配置中增加 `download_mirrors`（下载镜像）与 `pip_index_url`（PyPI 镜像）加速，见 [在线更新与发布](AUTO_UPDATE.md#国内服务器加速)；镜像只作下载通道，SHA-256 校验与直连一致。依赖安装在独立用户的受限进程中完成，不向构建进程提供应用密钥。
+- 包只从 root 配置的 GitHub 仓库最新正式发布获取，并按 GitHub 的 SHA-256 digest 校验；原生升级器还会用 `/etc/qbot/sigstore-trusted-root.jsonl` 和 GitHub CLI 验证 `provenance.sigstore.json`，验证失败即拒绝解包。服务器位于中国大陆时，可在该配置中增加 `download_mirrors`（下载镜像）与 `pip_index_url`（PyPI 镜像）加速，见 [在线更新与发布](AUTO_UPDATE.md#国内服务器加速)；镜像只作下载通道，SHA-256 与构建来源校验与直连一致。依赖安装在独立用户的受限进程中完成，不向构建进程提供应用密钥。
 - 升级服务自身被中断时，下次启动会读取持久化状态；已经恢复对外写入的版本不会再自动覆盖数据库。如显示「需要检查」，先查看服务和升级日志再处理，保留备份。
 
 升级服务的 root 配置是 `/etc/qbot/updater.json`；不要将该文件或部署目录的写权限授予机器人用户。宿主机升级服务的代码更新由服务器管理员安装，网页升级不修改宿主机权限配置。
+
+### 配置构建来源验证
+
+安装或升级宿主机升级服务前，先安装 GitHub CLI，并确认它支持离线证明验证参数：
+
+```bash
+gh --version
+gh attestation verify --help | grep -E -- '--source-ref|--custom-trusted-root'
+```
+
+使用与 `/etc/qbot/updater.json` 中相同的仓库生成受信根文件，并限制其为 root 管理的系统配置：
+
+```bash
+sudo install -d -m 0755 /etc/qbot
+gh attestation trusted-root --repo yuchen0x1/AI-QQ-Bot | sudo tee /etc/qbot/sigstore-trusted-root.jsonl >/dev/null
+sudo chown root:root /etc/qbot/sigstore-trusted-root.jsonl
+sudo chmod 0644 /etc/qbot/sigstore-trusted-root.jsonl
+sudo python3 scripts/updater/install.py
+sudo systemctl restart qbot-updater qbot
+```
+
+升级服务启动后，管理台的在线更新状态应显示可安装；如果信任根、GitHub CLI 或宿主机升级服务版本不符合要求，状态会显示具体前置条件，不能继续安装。

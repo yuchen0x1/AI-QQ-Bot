@@ -25,7 +25,7 @@
 6. **密钥轮换**：修改 `SECRET_KEY` 会使 JWT 和既有 Fernet 密文不可解；轮换前需制定重新加密/重新登录流程。
 7. **横向扩展**：EventHub 和部分限流为进程内；账号租约已落库，但扩展前仍需验证连接接管、事件广播和共享限流。
 8. **Webhook DNS 风险**：当前校验阻断常见私网目标和 IP 字面量，但未对第三方域名做 DNS 固定/出站防火墙隔离；生产仍应限制 backend 的出站网络和可访问网段。
-9. **发布真实性**：Release 目前有 SHA-256 校验和，但没有签名 manifest、SBOM、SLSA provenance 或容器签名；不要把校验和单独当作发布者身份认证。
+9. **发布真实性**：Release 现在同时附带 SHA-256 校验和与 GitHub Actions Artifact Attestation；原生升级服务会在解包前校验 `provenance.sigstore.json`。当前仍没有 SBOM 或 Docker 镜像签名，容器部署不能把 SHA-256 单独当作发布者身份认证。
 10. **插件执行边界**：插件目录会动态导入 Python，权限声明不是沙箱；只加载审查过的代码，后续路线包含签名 manifest 和隔离执行。
 
 ## 生产基线

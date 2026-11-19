@@ -26,6 +26,9 @@ async def installer_rpc(method: str = "GET", payload: dict | None = None) -> dic
 
 async def installer_state() -> dict:
     try:
-        return {"available": True, **await installer_rpc()}
+        state = await installer_rpc()
+        if not state.get("provenance_ready"):
+            return {**state, "available": False, "reason": "请按原生部署文档更新宿主机升级服务及 Sigstore 信任根"}
+        return {**state, "available": True}
     except InstallerUnavailable as exc:
         return {"available": False, "reason": str(exc), "job": None}

@@ -22,6 +22,7 @@ def main():
     prefix = "qbot-ai-" + version
     args.output.parent.mkdir(parents=True, exist_ok=True)
     sources = [
+        "LICENSE",
         "backend/app",
         "backend/migrations",
         "backend/plugins",
