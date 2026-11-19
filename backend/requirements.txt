@@ -4,7 +4,7 @@ pydantic==2.10.6
 pydantic-settings==2.7.1
 sqlalchemy[asyncio]==2.0.43
 asyncpg==0.30.0
-aiosqlite==0.20.0
+aiosqlite==0.22.1
 alembic==1.14.0
 redis==5.2.1
 apscheduler==3.11.0
