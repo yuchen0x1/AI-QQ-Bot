@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS agentmail
+FROM node:26-bookworm-slim AS agentmail
 RUN npm install -g --ignore-scripts @tencent-qqmail/agently-cli@1.0.18 \
     && mkdir /out \
     && cp "$(node -p 'require("/usr/local/lib/node_modules/@tencent-qqmail/agently-cli/scripts/run.js").getBinaryPath()')" /out/agently-cli
