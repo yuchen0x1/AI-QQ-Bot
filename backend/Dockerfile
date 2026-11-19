@@ -3,7 +3,7 @@ RUN npm install -g --ignore-scripts @tencent-qqmail/agently-cli@1.0.18 \
     && mkdir /out \
     && cp "$(node -p 'require("/usr/local/lib/node_modules/@tencent-qqmail/agently-cli/scripts/run.js").getBinaryPath()')" /out/agently-cli
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
