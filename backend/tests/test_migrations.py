@@ -17,7 +17,7 @@ from app.db.migrations import SchemaVersionError
 from app.db.session import SessionLocal
 from app.models import Base, BotCommand, Plugin, Role, SystemSetting, User
 
-HEAD = "0014_retention_default_three"
+HEAD = "0015_ws_tickets"
 
 
 @pytest.fixture

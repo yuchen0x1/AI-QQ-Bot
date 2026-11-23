@@ -27,3 +27,17 @@ async def test_ticket_uses_origin_session_and_is_rejected_after_revocation(clien
     session.revoked_at = datetime.now(timezone.utc)
     await db.commit()
     assert await _authenticate(ticket) is None
+
+
+async def test_ticket_can_only_be_used_once(client, db):
+    login = await client.post('/api/auth/login', json={'username': 'admin', 'password': 'admin123'})
+    headers = {'Authorization': f"Bearer {login.json()['access_token']}"}
+    ticket = (await client.post('/api/ws/ticket', headers=headers)).json()['ticket']
+    assert (await _authenticate(ticket)).username == 'admin'
+    # 第二次握手（包括并发重放）必须被拒绝。
+    assert await _authenticate(ticket) is None
+    # 非消费模式（仅用于检查身份）不影响票据状态。
+    fresh = (await client.post('/api/ws/ticket', headers=headers)).json()['ticket']
+    assert (await _authenticate(fresh, consume=False)).username == 'admin'
+    assert (await _authenticate(fresh)).username == 'admin'
+    assert await _authenticate(fresh) is None

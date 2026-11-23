@@ -158,7 +158,7 @@ cd ../frontend && npm run build
 ## 重要 API
 
 - Swagger：`/api/docs`（登录以外端点由 JWT + RBAC 保护）
-- 健康检查：`/api/system/health`
+- 健康检查：`/api/system/health`（兼容入口）；容器就绪探针使用 `/api/system/ready`，进程存活探针使用 `/api/system/live`
 - WebSocket 日志：`/api/ws/logs`（携带 JWT Token）
 - GitHub Webhook：`/api/webhook/github/{repo_id}`
 - 账号管理：`POST/PUT /api/accounts`（`protocol=qq_official` 时传 `app_id` / `app_secret` / `official_*`）、`POST /api/accounts/{id}/test-connection`、`GET /api/accounts/{id}/capabilities`
