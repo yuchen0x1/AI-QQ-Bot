@@ -1,10 +1,12 @@
 # UPGRADE_REPORT
 
-升级批次：2026-11-19（Asia/Shanghai）
+升级批次：2026-11-23（Asia/Shanghai）
 项目：QBot AI 多账号智能 QQ 机器人管理平台
 分支：`main`
-基线：`9dde09f`
-工作区：v1.4.12 改动仍保留在本地，未提交、未推送、未发布。
+基线：`88e778e`
+目标版本：`v1.5.0`
+
+本批次完成后端安全、运维探针、审计可观测性和插件指标升级；代码已通过本地测试与生产构建，尚未推送/发布。
 
 ## A. 竞品研究
 
@@ -18,7 +20,7 @@
 ## B. 升级数量与状态
 
 - 已建立升级点：**50 项**（EV-001 至 EV-050）。
-- 本轮完成：**16 项**：EV-001~006、EV-009~012、EV-021~024、EV-027~028。
+- 本轮完成：**21 项**：新增 WS 票据一次性消费、存活/就绪探针、审计筛选导出、插件指标 UI 与回归测试。
 - 既有能力复核为已具备：EV-025、EV-032。
 - 部分完成：EV-014、EV-019、EV-020、EV-034、EV-050，以及现有跨实例事件/插件指标基础能力。
 - 设计完成但未实施：EV-047。
@@ -30,6 +32,10 @@
 
 ### 后端
 
+- `backend/app/api/ws.py`、`backend/app/models/user.py`、`backend/migrations/versions/0015_ws_tickets.py`：WebSocket ticket 持久化并一次性消费，阻断票据重放。
+- `backend/app/api/system.py`、`docker-compose.yml`：分离 `/live` 与 `/ready` 探针，Compose 改用就绪检查。
+- `backend/app/api/auth.py`：审计日志支持用户/动作/IP/时间筛选和 5000 条上限的 CSV 脱敏导出。
+
 - `backend/app/services/github/provider.py`：移除 Gitee URL query Token。
 - `backend/app/services/backup.py`：SQLite online backup、临时文件原子替换、健壮 URL 路径解析、PostgreSQL dump 流式 gzip、备份列表只返回文件名。
 - `backend/app/api/system.py`：备份保留数量兼容旧的裸设置值，备份响应不再泄露绝对路径。
@@ -39,6 +45,9 @@
 - `scripts/updater/daemon.py`：校验 pointer/job JSON，损坏状态安全报告并阻止新安装。
 
 ### 前端与宣传站
+
+- `frontend/src/views/PluginsView.vue`：新增调用次数、错误率、平均耗时、权限拒绝和最近错误指标面板。
+- `frontend/src/views/SettingsView.vue`：审计日志筛选与 CSV 导出入口。
 
 - `frontend/src/api.ts`、`router/index.ts`、`App.vue`、`stores/status.ts`、`LoginView.vue`、`SettingsView.vue`、`UpdatePanel.vue`：浏览器使用 HttpOnly Cookie，会话守卫和更新轮询不再读取 localStorage JWT；登录页和登出流程会停止实时 ticket 重连。
 - `frontend/src/views/PushRulesView.vue`：修复 `qq_group` payload 字段和账号切换联动。
@@ -54,10 +63,10 @@
 
 | 检查 | 结果 |
 |---|---|
-| `backend` pytest | BLOCKED：当前工作区未提供 `.venv`，系统 Python 未安装 pytest |
-| `backend` Ruff | BLOCKED：当前工作区未提供 `.venv`，系统 Python 未安装 ruff |
-| `backend` compileall + `prepare_release.py --tag v1.4.12` | PASS |
-| `npm run build` | PASS：vue-tsc + Vite，2383 modules transformed |
+| `backend` pytest | PASS：全量通过（含 1 skipped；参数化用例按项目配置展开） |
+| `backend` Ruff | PASS |
+| `backend` compileall + `prepare_release.py --tag v1.5.0` | PASS |
+| `npm run build` | PASS：vue-tsc + Vite，前端生产构建通过 |
 | `docker compose --env-file .env.example config --no-env-resolution --quiet` | PASS |
 | `git diff --check` | PASS；仅有 CRLF 转换提醒 |
 | 备份专项测试 | 本次未复跑：当前工作区缺少后端测试依赖；此前记录为 3 passed，SQLite online backup 行完整性手工检查通过 |
@@ -66,7 +75,7 @@
 | GitHub Actions provenance 真实发布与原生主机验证 | NOT RUN：当前未创建 v1.4.12 Release，且缺生产 Linux 主机与 Sigstore 信任根 |
 | 真实 QQ/GitHub Webhook/AI Provider/TLS | NOT RUN：需要外部环境和凭据 |
 
-另有一个重要的测试基线注意事项：从仓库根目录直接运行 pytest 会绕过 `backend/pytest.ini` 的异步配置，出现夹具/插件错误；项目实际约定是在 `backend` 目录使用虚拟环境运行。本次工作区没有该虚拟环境，系统 Python 也无法从 PyPI 安装依赖，因此后端测试与 Ruff 未复跑；230 passed、1 skipped 是此前已记录的结果，不作为本次验证结论。
+测试使用 `backend/.venv` 和独立临时 SQLite；Windows 默认 pytest 临时目录权限问题通过 `--basetemp` 隔离目录规避。真实 Docker、QQ、GitHub、AI、TLS 和生产恢复演练仍未执行。
 
 ## E. 项目变化
 
@@ -75,6 +84,9 @@
 核心业务已经可运行，拥有官方 QQ 接入、AI、GitHub、任务、插件、认证和发布能力；但浏览器长效 JWT 存在脚本读取面，推送规则存在真实字段错配，备份和 Webhook 边界还不够稳健，通用页面失败反馈不足。
 
 ### 升级后
+
+- WS 票据与会话绑定并只能消费一次；新增可供编排系统使用的存活/就绪探针。
+- 审计查询从只能分页升级为可筛选、可脱敏导出；插件运行状态从列表信息升级为指标面板。
 
 - 管理台浏览器认证回到 HttpOnly Cookie；Bearer 继续保留给 API 客户端。
 - Gitee Token、备份绝对路径和任意 forwarded header 信任等暴露面已收窄。

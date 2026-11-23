@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -12,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import client_ip, get_current_user, require
 from app.api.pagination import PageParam, PageSizeParam
 from app.core.config import settings
+from app.core.logging import mask_text
 from app.core.ratelimit import login_limiter
 from app.core.security import (
     create_access_token,
@@ -489,14 +492,75 @@ async def list_audit_logs(
     page_size: PageSizeParam = 20,
     action: str | None = None,
     username: str | None = None,
+    ip: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require("audit:view")),
+):
+    query = _audit_query(action=action, username=username, ip=ip, start=start, end=end)
+    total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    rows = await db.scalars(query.order_by(AuditLog.id.desc()).offset((page - 1) * page_size).limit(page_size))
+    return Page(items=[AuditLogOut.model_validate(r) for r in rows], total=total, page=page, page_size=page_size)
+
+
+def _audit_query(
+    *,
+    action: str | None = None,
+    username: str | None = None,
+    ip: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
 ):
     query = select(AuditLog)
     if action:
         query = query.where(AuditLog.action.ilike(f"%{action}%"))
     if username:
         query = query.where(AuditLog.username.ilike(f"%{username}%"))
-    total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    rows = await db.scalars(query.order_by(AuditLog.id.desc()).offset((page - 1) * page_size).limit(page_size))
-    return Page(items=[AuditLogOut.model_validate(r) for r in rows], total=total, page=page, page_size=page_size)
+    if ip:
+        query = query.where(AuditLog.ip.ilike(f"%{ip}%"))
+    if start:
+        query = query.where(AuditLog.created_at >= _utc(start))
+    if end:
+        query = query.where(AuditLog.created_at <= _utc(end))
+    return query
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+@router.get("/audit-logs/export")
+async def export_audit_logs(
+    action: str | None = None,
+    username: str | None = None,
+    ip: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require("audit:view")),
+):
+    """导出筛选后的审计记录（CSV，UTF-8 BOM 便于 Excel 直接打开）。
+
+    导出量上限 5000 条，避免一次查询拖垮数据库；detail 统一做敏感信息脱敏。
+    """
+    query = _audit_query(action=action, username=username, ip=ip, start=start, end=end)
+    rows = list(await db.scalars(query.order_by(AuditLog.id.desc()).limit(5000)))
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["time", "username", "action", "target", "detail", "ip"])
+    for row in rows:
+        writer.writerow([
+            row.created_at.isoformat() if row.created_at else "",
+            row.username or "",
+            row.action,
+            row.target or "",
+            mask_text(row.detail or "")[:2000],
+            row.ip or "",
+        ])
+    filename = f"qbot-audit-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.csv"
+    return Response(
+        content="\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

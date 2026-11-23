@@ -35,8 +35,35 @@ async def stats(_: User = Depends(require("system:view"))):
 @router.get("/health")
 async def health():
     """健康检查端点（供 Docker / 负载均衡探活）。"""
-    from app.db.session import engine
+    payload = await _readiness_payload()
+    db_ok = bool(payload["database"])
+    # 探活端点必须通过 HTTP 状态反映不可用，否则反向代理会把数据库故障实例
+    # 继续放进流量池，只返回一个看似正常的 JSON。
+    return JSONResponse(status_code=200 if db_ok else 503, content=payload)
+
+
+@router.get("/live")
+async def live():
+    """存活探针：只证明进程能响应，不检查数据库等外部依赖。
+
+    Docker/进程管理器据此判断要不要重启容器；把数据库故障也算进来会触发
+    整机重启风暴，反而掩盖真实原因。依赖就绪请用 ``/ready``。
+    """
+    return JSONResponse({"status": "alive", "version": APP_VERSION})
+
+
+@router.get("/ready")
+async def ready():
+    """就绪探针：数据库不可用时返回 503，让负载均衡摘除该实例。"""
+    payload = await _readiness_payload()
+    return JSONResponse(status_code=200 if payload["database"] else 503, content=payload)
+
+
+async def _readiness_payload() -> dict:
     from sqlalchemy import text
+
+    from app.db.session import engine
+    from app.services.runtime_start import services_deferred
 
     db_ok = True
     try:
@@ -44,12 +71,12 @@ async def health():
             await conn.execute(text("SELECT 1"))
     except Exception:  # noqa: BLE001
         db_ok = False
-    from app.services.runtime_start import services_deferred
-    payload = {"status": "ok" if db_ok else "degraded", "database": db_ok, "version": APP_VERSION,
-               "services_deferred": services_deferred}
-    # 探活端点必须通过 HTTP 状态反映不可用，否则反向代理会把数据库故障实例
-    # 继续放进流量池，只返回一个看似正常的 JSON。
-    return JSONResponse(status_code=200 if db_ok else 503, content=payload)
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "database": db_ok,
+        "version": APP_VERSION,
+        "services_deferred": services_deferred,
+    }
 
 
 @router.get("/config")

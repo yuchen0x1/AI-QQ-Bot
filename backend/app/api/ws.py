@@ -16,15 +16,17 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, Request, WebSocket, WebSocketDisconnect
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.db.session import get_db
 from app.core.events import event_hub
 from app.core.logging import hub
 from app.core.security import create_access_token, decode_access_token, token_matches_user
 from app.core.timeutil import day_start
 from app.db.session import SessionLocal
-from app.models import AuthSession, Message, User
+from app.models import AuthSession, Message, User, WsTicket
 from app.services.account_manager import account_manager
 from app.services.scheduler import scheduler_service
 
@@ -49,7 +51,7 @@ def _ticket_payload(token: str) -> dict | None:
     return payload
 
 
-async def _authenticate(token: str | None) -> User | None:
+async def _authenticate(token: str | None, *, consume: bool = True) -> User | None:
     if not token:
         return None
     # 票据与真实访问令牌共用签名，靠 purpose 区分，避免票据被当成 API 凭证使用。
@@ -67,6 +69,8 @@ async def _authenticate(token: str | None) -> User | None:
         jti = payload.get("session_jti") if ticket else payload.get("jti")
         if ticket and not jti:
             return None
+        if ticket and consume and not await _consume_ticket(db, user, payload):
+            return None
         if jti:
             session = await db.scalar(select(AuthSession).where(AuthSession.jti == jti, AuthSession.user_id == user.id))
             now = datetime.now(timezone.utc)
@@ -78,6 +82,42 @@ async def _authenticate(token: str | None) -> User | None:
             session.last_seen_at = now
             await db.commit()
         return user
+
+
+async def _consume_ticket(db: AsyncSession, user: User, payload: dict) -> bool:
+    """抢占式消费票据：并发握手时只有一次 UPDATE 能命中，重复使用直接拒绝。
+
+    票据在签发时写入 ``ws_tickets``，因此这里同时校验「确实由本服务签发」和
+    「尚未被消费」两个条件，避免同一张票在 60 秒窗口内建立多条连接。
+    """
+    ticket_jti = str(payload.get("jti") or "")
+    if not ticket_jti:
+        return False
+    now = datetime.now(timezone.utc)
+    # SQLite stores ``DateTime(timezone=True)`` as naive text. Use a naive
+    # comparison value for the predicate while keeping the audit timestamp UTC.
+    query_now = now.replace(tzinfo=None)
+    try:
+        result = await db.execute(
+            update(WsTicket)
+            .where(
+                WsTicket.jti == ticket_jti,
+                WsTicket.user_id == user.id,
+                WsTicket.consumed_at.is_(None),
+                WsTicket.expires_at > query_now,
+            )
+            .values(consumed_at=now)
+            # SQLite 存的是 naive datetime，交给 ORM 做 Python 侧评估会抛
+            # "can't compare offset-naive and offset-aware datetimes"；条件本身
+            # 已在 SQL 中完成，这里不需要同步会话内的对象。
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("WebSocket ticket consumption failed jti=%s", ticket_jti)
+        await db.rollback()
+        return False
+    return result.rowcount == 1
 
 
 def _session_ref(token: str | None) -> tuple[str | None, str]:
@@ -108,7 +148,11 @@ async def _session_alive(username: str, jti: str | None) -> bool:
 
 
 @router.post("/ws/ticket")
-async def issue_ws_ticket(request: Request, current=Depends(get_current_user)):
+async def issue_ws_ticket(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current=Depends(get_current_user),
+):
     """签发一次性 WebSocket 票据，避免把长期 JWT 放进查询串。
 
     ticket 只携带 purpose=ws_ticket 与原会话 jti，60 秒过期；它不带 pwd_v，
@@ -122,7 +166,24 @@ async def issue_ws_ticket(request: Request, current=Depends(get_current_user)):
         {"purpose": "ws_ticket", "session_jti": session_jti},
         expires_minutes=1,
     )
+    decoded = decode_access_token(token) or {}
+    expires_at = datetime.fromtimestamp(float(decoded.get("exp") or 0), tz=timezone.utc)
+    db.add(
+        WsTicket(
+            jti=str(decoded.get("jti") or ""),
+            user_id=current.id,
+            expires_at=expires_at,
+        )
+    )
+    await _prune_tickets(db)
+    await db.commit()
     return {"ticket": token, "expires_in": WS_TICKET_TTL_SECONDS}
+
+
+async def _prune_tickets(db: AsyncSession) -> None:
+    """清理过期票据，控制表体积；保留最近一小时便于排查重复握手。"""
+    cutoff = datetime.now(timezone.utc).timestamp() - 3600
+    await db.execute(delete(WsTicket).where(WsTicket.expires_at < datetime.fromtimestamp(cutoff, tz=timezone.utc)))
 
 
 @router.websocket("/ws/events")
