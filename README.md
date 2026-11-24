@@ -10,9 +10,9 @@
 
 <!-- github-release:start -->
 
-**[v1.5.3](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.5.3)** · 2026-11-24
+**[v1.5.2](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.5.2)** · 2026-11-24
 
-本版本完成 QBOT AI Control Center 全站 UI/UX 重构：深/浅主题体系、统一图标与命令面板（Ctrl/Cmd+K）、17 个页面接入真实 API/WebSocket 状态与空状态引导，并同步新增响应式与深浅主题验收。后端 API、权限与业务逻辑保持不变，无数据库迁移。
+本版本修复 AI 群总结跨账号消息泄漏、禁用 Provider 仍参与路由、任务 cron/interval 缺少服务端校验、Redis 队列 Worker 崩溃丢任务、告警 Webhook 的 DNS 解析与重定向绕过、普通日志凭据泄漏和前端 WebSocket 重连竞态；Release 发布器新增空更新说明校验，并补充发布检查清单。本版本无数据库结构迁移。
 
 [全部发行记录](https://github.com/yuchen0x1/AI-QQ-Bot/releases)
 
