@@ -7,7 +7,9 @@ import ResourceView from '../components/ResourceView.vue'
 // 「目标群聊」按所选账号联动下拉：官方机器人只有平台映射 ID、没有真实群号，
 // 手填群号几乎必错，所以改成选账号 → 自动拉取该账号已建档群聊 → 下拉直接选。
 const config = reactive<any>({
-  kicker:'DELIVERY ROUTING',title:'推送规则',description:'配置仓库更新消息应由哪个 QQ 账号发送至哪个群。官方机器人请先在群里 @ 机器人一次完成建档，再在这里下拉选择目标群聊',endpoint:'/github/push-rules',itemName:'推送规则',nameKey:'repo_full_name',paged:false,actionWidth:90,
+  kicker:'DELIVERY ROUTING',title:'推送规则',description:'配置仓库更新消息由哪个 QQ 账号发送至哪个群。官方机器人请先在群里 @ 机器人一次完成建档，再在这里下拉选择目标群聊；没有可选群聊时，请先到「群聊管理」确认映射 ID。',endpoint:'/github/push-rules',itemName:'推送规则',nameKey:'repo_full_name',paged:false,actionWidth:90,
+  emptyText:'尚未配置推送规则',
+  emptyHint:'先添加一条规则，选择监控仓库、发送账号和目标群聊；群聊必须先由机器人在群内完成建档。',
   columns:[{key:'repo_full_name',label:'GitHub 仓库',width:170},{key:'account_name',label:'发送账号',width:140},{key:'qq_group_display',label:'目标 QQ 群',width:170},{key:'only_stable',label:'仅正式版',type:'bool',width:95},{key:'ai_summary',label:'AI 摘要',type:'bool',width:85},{key:'markdown_card',label:'卡片',type:'bool',width:80},{key:'total_pushed',label:'已推送',width:80},{key:'enabled',label:'规则状态',type:'bool',width:95}],
   createLabel:'新增规则',
   createFields:[
