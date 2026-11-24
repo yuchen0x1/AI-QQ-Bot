@@ -116,7 +116,10 @@ async def check_for_update(channel: str | None = None) -> dict[str, Any]:
             releases = await api_client.list_releases(owner, name, per_page=50)
             candidates = [r for r in releases if not r.get("draft")]
             candidates.sort(key=lambda r: str(r.get("published_at") or ""), reverse=True)
-            release = next((r for r in candidates if r.get("prerelease") or r.get("tag_name")), None)
+            # Beta channel must only expose pre-releases. Falling back to the newest
+            # stable Release would silently turn beta into stable and could even
+            # offer an older version than the currently installed stable build.
+            release = next((r for r in candidates if r.get("prerelease")), None)
             if not release:
                 raise GithubError("没有可用的 Beta Release", 404)
             return release

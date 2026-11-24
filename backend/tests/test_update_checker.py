@@ -74,6 +74,87 @@ async def test_check_for_update_failure_does_not_raise() -> None:
     assert result["error"]
 
 
+async def test_beta_channel_only_accepts_prereleases() -> None:
+    """Beta must never silently fall back to a stable release."""
+    original_repo = settings.update_repository
+    original_channel = settings.update_channel
+    settings.update_repository = "yuchen0x1/AI-QQ-Bot"
+    settings.update_channel = "beta"
+    releases = [
+        {
+            "tag_name": "v9.9.9",
+            "html_url": "https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v9.9.9",
+            "body": "stable",
+            "published_at": "2026-11-23T00:00:00Z",
+            "prerelease": False,
+            "draft": False,
+            "assets": [],
+        },
+        {
+            "tag_name": "v1.5.3-beta.1",
+            "html_url": "https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.5.3-beta.1",
+            "body": "beta",
+            "published_at": "2026-11-20T00:00:00Z",
+            "prerelease": True,
+            "draft": False,
+            "assets": [],
+        },
+        {
+            "tag_name": "v1.5.4-beta.1",
+            "html_url": "https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.5.4-beta.1",
+            "body": "draft beta",
+            "published_at": "2026-11-24T00:00:00Z",
+            "prerelease": True,
+            "draft": True,
+            "assets": [],
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/repos/yuchen0x1/AI-QQ-Bot/releases")
+        assert request.url.params.get("per_page") == "50"
+        return httpx.Response(200, json=releases)
+
+    set_transport(httpx.MockTransport(handler))
+    try:
+        result = await check_for_update()
+    finally:
+        set_transport(None)
+        settings.update_repository = original_repo
+        settings.update_channel = original_channel
+    assert result["ok"] is True
+    assert result["channel"] == "beta"
+    assert result["latest_version"] == "1.5.3-beta.1"
+    assert result["prerelease"] is True
+
+
+async def test_beta_channel_without_prerelease_reports_no_release() -> None:
+    original_repo = settings.update_repository
+    original_channel = settings.update_channel
+    settings.update_repository = "yuchen0x1/AI-QQ-Bot"
+    settings.update_channel = "beta"
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{
+            "tag_name": "v9.9.9",
+            "html_url": "https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v9.9.9",
+            "published_at": "2026-11-23T00:00:00Z",
+            "prerelease": False,
+            "draft": False,
+            "assets": [],
+        }])
+
+    set_transport(httpx.MockTransport(handler))
+    try:
+        result = await check_for_update()
+    finally:
+        set_transport(None)
+        settings.update_repository = original_repo
+        settings.update_channel = original_channel
+    assert result["ok"] is False
+    assert result["latest_version"] is None
+
+
 async def test_check_for_update_retries_anonymously_after_invalid_global_token() -> None:
     original_token = settings.github_token
     settings.github_token = "expired-token"

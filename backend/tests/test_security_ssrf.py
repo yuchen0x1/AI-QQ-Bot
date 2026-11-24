@@ -4,8 +4,29 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from app.core.logging import MaskingFormatter
+from app.core.ssrf import OutboundURLError, validate_outbound_base_url
 from app.services import alerting
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/latest/meta-data",
+        "http://127.0.0.1:8000",
+        "https://user:pass@example.com/v1",
+        "ftp://example.com/v1",
+    ],
+)
+def test_outbound_provider_url_rejects_unsafe_targets(url: str) -> None:
+    with pytest.raises(OutboundURLError):
+        validate_outbound_base_url(url)
+
+
+def test_outbound_provider_url_allows_ollama_loopback() -> None:
+    assert validate_outbound_base_url("http://127.0.0.1:11434/", allow_http=True) == "http://127.0.0.1:11434"
 
 
 def test_webhook_hostname_resolution_rejects_private_address(monkeypatch):

@@ -23,13 +23,20 @@ os.environ["REDIS_ENABLED"] = "false"
 # 测试套件会在一个进程里发数百次请求，默认的每分钟限流会误伤后续用例。
 # 这里调到足够大，限流本身的行为由 test_runtime_safety/test_hardening 单独覆盖。
 os.environ["RATE_LIMIT_PER_MINUTE"] = "100000"
+# SSRF 单元测试不解析 DNS；测试通过 MockTransport 注入，避免依赖真实域名。
+os.environ["QBOT_TEST_DISABLE_DNS_SSRF"] = "1"
 
 import httpx  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.db.session import engine  # noqa: E402
 from app.services.account_manager import account_manager  # noqa: E402
-from app.core.ratelimit import api_limiter, legacy_webhook_limiter, login_limiter  # noqa: E402
+from app.core.ratelimit import (  # noqa: E402
+    api_limiter,
+    legacy_webhook_limiter,
+    login_limiter,
+    two_factor_limiter,
+)
 
 
 
@@ -52,6 +59,7 @@ def _reset_rate_limiters():
     """每个用例前清空限流桶，避免跨用例累积把后续请求打成 429。"""
     api_limiter._hits.clear()
     login_limiter._hits.clear()
+    two_factor_limiter._hits.clear()
     legacy_webhook_limiter._hits.clear()
     yield
 

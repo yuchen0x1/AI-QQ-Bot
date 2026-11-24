@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import ipaddress
 import math
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from urllib.parse import urlparse
 
 from sqlalchemy import delete, select
@@ -26,10 +28,23 @@ CONFIG_PREFIX = "github_notifications:"
 BIND_PREFIX = "github_group_bind:"
 PROBE_PREFIX = "github_delivery_probe:"
 PERMISSION_PREFIX = "github_group_permission:"
+SYNC_LOG_PREFIX = "github_sync_log:"
 
 
 def proactive_denied(error: str | None) -> bool:
     return "40034105" in (error or "")
+
+
+def _is_transient_sync_failure(error: str | None, failed: list[dict[str, Any]]) -> bool:
+    """Credential expiry and GitHub throttling are user-facing states, not crashes."""
+    if "授权已失效" in (error or "") or "Bad credentials" in (error or ""):
+        return True
+    return any(
+        "401" in str(item.get("error") or "")
+        or "限流" in str(item.get("error") or "")
+        or "拒绝访问" in str(item.get("error") or "")
+        for item in failed
+    )
 
 
 async def save_delivery_probe(db: AsyncSession, target: GithubNotificationTarget, *, ok: bool, error: str = "") -> None:
@@ -127,6 +142,30 @@ async def config_row(db: AsyncSession, user_id: int) -> SystemSetting | None:
 async def read_config(db: AsyncSession, user_id: int) -> dict:
     row = await config_row(db, user_id)
     return dict(row.value) if row and isinstance(row.value, dict) else {}
+
+
+async def should_log_sync_failure(db: AsyncSession, user_id: int, state: str, error: str | None,
+                                 failed: list[dict[str, Any]]) -> bool:
+    """Only log when the user-visible failure outcome actually changes.
+
+    The config is intentionally marked ``running`` at the start of every tick,
+    so comparing the stored status cannot distinguish three identical failures.
+    A dedicated fingerprint survives those intermediate states and prevents an
+    expired token from writing thousands of identical ERROR rows every day.
+    """
+    fingerprint = hashlib.sha256(
+        json.dumps([state, error or "", failed[:50]], sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+    key = f"{SYNC_LOG_PREFIX}{user_id}"
+    row = await db.scalar(select(SystemSetting).where(SystemSetting.key == key))
+    if row and row.value == fingerprint:
+        return False
+    if row:
+        row.value = fingerprint
+    else:
+        db.add(SystemSetting(key=key, value=fingerprint, description="GitHub 同步失败去重指纹"))
+    await db.commit()
+    return True
 
 
 async def save_config(db: AsyncSession, user_id: int, value: dict) -> None:
@@ -428,8 +467,14 @@ async def sync_subscription(db: AsyncSession, user_id: int) -> None:
         await save_config(db, user_id, current)
         if state in {"error", "partial"}:
             from app.services.logs import write_log
-            await write_log(db, level="ERROR", category="github",
-                            message=f"GitHub 仓库同步异常：{error or str(failed[:3])[:400]}")
+            # Credential and rate-limit failures repeat on every 60s tick. Persist
+            # the state for the UI, but log at WARNING and only when the outcome
+            # actually changes; 37 repositories used to emit ~5k ERROR rows/day.
+            detail = error or str(failed[:3])[:400]
+            level = "WARNING" if _is_transient_sync_failure(error, failed) else "ERROR"
+            if await should_log_sync_failure(db, user_id, state, error, failed):
+                await write_log(db, level=level, category="github",
+                                message=f"GitHub 仓库同步异常：{detail}")
 
 
 async def tick_subscriptions() -> None:

@@ -15,7 +15,7 @@ from app.api.deps import client_ip, get_current_user, require
 from app.api.pagination import PageParam, PageSizeParam
 from app.core.config import settings
 from app.core.logging import mask_text
-from app.core.ratelimit import login_limiter
+from app.core.ratelimit import login_limiter, two_factor_limiter
 from app.core.security import (
     create_access_token,
     decode_access_token,
@@ -108,7 +108,7 @@ async def login(payload: LoginRequest, request: Request, response: Response, db:
         raise HTTPException(status_code=429, detail=f"登录尝试过于频繁，请 {retry_after} 秒后再试")
 
     user = await db.scalar(select(User).where(User.username == payload.username))
-    if user and user.is_locked:
+    if user and user.is_locked and not user.totp_enabled:
         remaining = int((user.locked_until.replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)).total_seconds())
         raise HTTPException(status_code=423, detail=f"账号已锁定，请 {max(1, remaining // 60)} 分钟后再试")
 
@@ -132,8 +132,9 @@ async def login(payload: LoginRequest, request: Request, response: Response, db:
     if not user.is_active:
         raise HTTPException(status_code=403, detail="账号已被禁用")
 
-    user.failed_attempts = 0
-    user.locked_until = None
+    if not user.totp_enabled:
+        user.failed_attempts = 0
+        user.locked_until = None
     user.last_login_at = datetime.now(timezone.utc)
     user.last_login_ip = ip
     if password_needs_rehash(user.password_hash):
@@ -144,6 +145,8 @@ async def login(payload: LoginRequest, request: Request, response: Response, db:
     await db.refresh(user)
 
     if user.totp_enabled:
+        # Keep the persisted 2FA lock: a fresh password login must not reset
+        # the brute-force counter for the second factor.
         user.totp_challenge_nonce = secrets.token_urlsafe(32)
         await db.commit()
         challenge = create_access_token(
@@ -172,7 +175,7 @@ async def verify_login_2fa(
     response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    allowed, retry_after = login_limiter.allow(f"2fa:{payload.challenge_token}:{client_ip(request)}")
+    allowed, retry_after = two_factor_limiter.allow(client_ip(request))
     if not allowed:
         raise HTTPException(status_code=429, detail=f"验证码尝试过于频繁，请 {retry_after} 秒后再试")
     decoded = decode_access_token(payload.challenge_token)
@@ -181,12 +184,28 @@ async def verify_login_2fa(
     user = await db.scalar(select(User).where(User.username == decoded["sub"]))
     if not user or not user.is_active or not token_matches_user(decoded, user.password_hash) or not user.totp_enabled or decoded.get("nonce") != user.totp_challenge_nonce:
         raise HTTPException(status_code=401, detail="二次验证已失效，请重新登录")
+    if user.is_locked:
+        remaining = int((user.locked_until.replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)).total_seconds())
+        raise HTTPException(status_code=423, detail=f"二次验证已锁定，请 {max(1, remaining // 60)} 分钟后再试")
     secret = decrypt_secret(user.totp_secret_enc)
     counter = matching_counter(secret or "", payload.code)
     if counter is None or (user.totp_last_counter is not None and counter <= user.totp_last_counter):
+        user.failed_attempts += 1
+        if user.failed_attempts >= settings.login_max_attempts:
+            user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=settings.login_lock_minutes)
+            user.failed_attempts = 0
+            await write_log(
+                db,
+                level="WARNING",
+                category="auth",
+                message=f"用户 {user.username} 连续二次验证失败，已锁定 {settings.login_lock_minutes} 分钟",
+            )
+        await db.commit()
         raise HTTPException(status_code=401, detail="验证码错误或已使用")
     user.totp_last_counter = counter
     user.totp_challenge_nonce = None
+    user.failed_attempts = 0
+    user.locked_until = None
     token_response = await _token_response(db, user, request, response)
     await db.commit()
     await audit(db, user_id=user.id, username=user.username, action="login_2fa", ip=client_ip(request))

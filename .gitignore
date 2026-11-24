@@ -29,3 +29,5 @@ napcat/
 .screenshots/
 backend/data/
 .evolution/
+
+/.acceptance/

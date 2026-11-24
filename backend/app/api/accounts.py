@@ -14,6 +14,7 @@ from app.adapters.base import AdapterError
 from app.api.deps import client_ip, require
 from app.core.config import settings
 from app.core.security import encrypt_secret
+from app.core.ssrf import OutboundURLError, validate_outbound_base_url
 from app.core.timeutil import date_bucket, day_start
 from app.db.session import get_db
 from app.models import Account, AccountConnection, GithubNotificationTarget, Group, Message, PushRule, SystemLog, SystemSetting, User
@@ -158,6 +159,13 @@ async def create_account(
         "official_allow_proactive": bool(payload.official_allow_proactive),
         "official_api_base": payload.official_api_base or "",
     }
+    if official_config["official_api_base"]:
+        try:
+            official_config["official_api_base"] = validate_outbound_base_url(
+                official_config["official_api_base"], allow_http=True
+            )
+        except OutboundURLError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     connection_mode = payload.connection_mode
     account = Account(
         account_id=uuid.uuid4().hex[:12],
@@ -224,6 +232,12 @@ async def update_account(
         account.app_secret_enc = encrypt_secret(secret)
     incoming_features = {key: data.pop(key) for key in OFFICIAL_FEATURE_KEYS if key in data}
     if incoming_features:
+        api_base = incoming_features.get("official_api_base")
+        if api_base:
+            try:
+                incoming_features["official_api_base"] = validate_outbound_base_url(api_base, allow_http=True)
+            except OutboundURLError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         account.features = {**(account.features or {}), **incoming_features}
     for field, value in data.items():
         setattr(account, field, value)
