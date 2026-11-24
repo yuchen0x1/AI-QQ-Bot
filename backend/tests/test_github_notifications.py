@@ -158,6 +158,32 @@ async def test_failed_repository_listing_does_not_hide_existing(client, admin_he
     assert (await read_config(db, user_id))["sync_status"] == "error"
 
 
+async def test_repeated_invalid_credentials_do_not_spam_error_logs(client, admin_headers, db, mock_account, notification_transport, monkeypatch):
+    from app.models import SystemLog
+    from app.services.github import automation
+    from app.services.github.oauth import OAuthError
+
+    await configure(client, admin_headers, mock_account)
+    user_id = (await db.scalar(select(UserGithubToken).where(UserGithubToken.login == "notifier"))).user_id
+    await sync_subscription(db, user_id)
+
+    async def expired(*args, **kwargs):
+        raise OAuthError("GitHub 授权已失效，请重新绑定")
+
+    monkeypatch.setattr(automation, "list_user_repos", expired)
+    before = await db.scalar(select(SystemLog.id).order_by(SystemLog.id.desc()))
+    for _ in range(3):
+        cfg = await read_config(db, user_id)
+        cfg["sync_requested"] = True
+        await save_config(db, user_id, cfg)
+        await sync_subscription(db, user_id)
+    logs = list(await db.scalars(select(SystemLog).where(SystemLog.id > (before or 0), SystemLog.category == "github")))
+    credential_logs = [log for log in logs if "授权已失效" in log.message and "仓库同步异常" in log.message]
+    assert len(credential_logs) == 1, [log.message for log in credential_logs]
+    assert credential_logs[0].level == "WARNING"
+    assert (await read_config(db, user_id))["sync_status"] == "error"
+
+
 async def test_signed_push_and_comment_are_delivered_once_and_retry_after_offline(client, admin_headers, db, mock_account, notification_transport):
     await configure(client, admin_headers, mock_account)
     user_id = (await db.scalar(select(UserGithubToken).where(UserGithubToken.login == "notifier"))).user_id

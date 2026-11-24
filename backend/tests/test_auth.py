@@ -175,3 +175,45 @@ async def test_totp_login_and_session_revocation(client: httpx.AsyncClient, admi
     logout = await client.post("/api/auth/logout", headers=session_headers)
     assert logout.status_code == 200
     assert (await client.get("/api/auth/me", headers=session_headers)).status_code == 401
+
+
+async def test_totp_failure_lock_survives_new_challenge(client: httpx.AsyncClient, admin_headers: dict[str, str], monkeypatch):
+    """A fresh password login must not reset a persisted 2FA brute-force lock."""
+    from app.core.config import settings
+    from app.core.totp import generate_code
+
+    created = await client.post(
+        "/api/users",
+        headers=admin_headers,
+        json={"username": "totp_lock_user", "password": "Totp@12345"},
+    )
+    assert created.status_code in (201, 409), created.text
+    login = await client.post("/api/auth/login", json={"username": "totp_lock_user", "password": "Totp@12345"})
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    setup = await client.post("/api/auth/2fa/setup", headers=headers)
+    assert setup.status_code == 200
+    secret = setup.json()["secret"]
+    assert (await client.post("/api/auth/2fa/confirm", headers=headers, json={"code": generate_code(secret)})).status_code == 200
+
+    original_attempts = settings.login_max_attempts
+    monkeypatch.setattr(settings, "login_max_attempts", 2)
+    try:
+        for _ in range(2):
+            challenge = await client.post("/api/auth/login", json={"username": "totp_lock_user", "password": "Totp@12345"})
+            assert challenge.json()["requires_2fa"] is True
+            failed = await client.post(
+                "/api/auth/login/2fa",
+                json={"challenge_token": challenge.json()["challenge_token"], "code": "000000"},
+            )
+            assert failed.status_code == 401
+
+        fresh = await client.post("/api/auth/login", json={"username": "totp_lock_user", "password": "Totp@12345"})
+        assert fresh.json()["requires_2fa"] is True
+        locked = await client.post(
+            "/api/auth/login/2fa",
+            json={"challenge_token": fresh.json()["challenge_token"], "code": generate_code(secret)},
+        )
+        assert locked.status_code == 423
+    finally:
+        monkeypatch.setattr(settings, "login_max_attempts", original_attempts)

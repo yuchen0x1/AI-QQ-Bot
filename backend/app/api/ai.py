@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import require
 from app.api.pagination import PageParam, PageSizeParam
 from app.core.security import decrypt_secret, encrypt_secret, mask_secret
+from app.core.ssrf import OutboundURLError, validate_outbound_base_url
 from app.db.session import get_db
 from app.models import AIMessage, AIModel, AIProvider, AIConversation, AIUsageLog, User
 from app.schemas.ai import (
@@ -84,10 +85,14 @@ async def create_provider(
     exists = await db.scalar(select(AIProvider).where(AIProvider.name == payload.name))
     if exists:
         raise HTTPException(status_code=409, detail="同名供应商已存在")
+    try:
+        base_url = validate_outbound_base_url(payload.base_url, allow_http=payload.kind == "ollama")
+    except OutboundURLError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     provider = AIProvider(
         name=payload.name,
         kind=payload.kind,
-        base_url=payload.base_url.rstrip("/"),
+        base_url=base_url,
         api_key_enc=encrypt_secret(payload.api_key),
         enabled=payload.enabled,
         remark=payload.remark,
@@ -116,7 +121,10 @@ async def update_provider(
         provider.api_key_enc = encrypt_secret(api_key) if api_key else None
     for field, value in data.items():
         if field == "base_url" and value:
-            value = value.rstrip("/")
+            try:
+                value = validate_outbound_base_url(value, allow_http=provider.kind == "ollama")
+            except OutboundURLError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         setattr(provider, field, value)
     await db.commit()
     await db.refresh(provider)

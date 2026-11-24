@@ -57,6 +57,8 @@ class SlidingWindowLimiter:
 
 
 login_limiter = SlidingWindowLimiter(limit=10, window_seconds=300)
+# 2FA 独立限流，避免和密码登录互相挤占重试窗口。
+two_factor_limiter = SlidingWindowLimiter(limit=10, window_seconds=300)
 # api_limiter 的阈值来自 RATE_LIMIT_PER_MINUTE（此前该环境变量从未被读取，
 # 配置了也不生效）。下限收紧到 60，避免误配成 0 直接锁死整个后台。
 api_limiter = SlidingWindowLimiter(limit=max(60, settings.rate_limit_per_minute), window_seconds=60)
