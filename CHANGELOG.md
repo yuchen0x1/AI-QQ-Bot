@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 未发布 · main（2026-11-24）
+## 2026-11-24 · v1.5.2
 
 - 修复：AI 群总结按账号隔离消息，禁用 Provider 后其模型不再参与选择/降级，无效 cron 和 interval 在创建/更新任务时被拒绝。
 - 稳定性：Redis 任务队列改为 processing lease + ACK/NACK、失败重试、死信队列和崩溃后过期任务恢复；前端 WebSocket 手动重连不再与旧连接回调竞争。
