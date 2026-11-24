@@ -26,6 +26,7 @@
 
 ## 发布记录
 
-- 代码升级合并提交：`5d79554`（PR #15）。
+- 代码升级合并提交：`5d79554`（PR #15）；版本发布提交：`180ad55`（PR #16）。
 - 首次误建 `v1.5.1` 暴露版本元数据未同步，工作流按设计在 package job 失败；该草稿与标签已撤回，不作为正式版本。
-- 正确版本 `v1.5.2` 已同步后端、前端与锁文件版本并补充 canonical release notes。
+- 正确版本 `v1.5.2` 已同步后端、前端与锁文件版本并补充 canonical release notes。Tag 指向 `180ad55`，[Release](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.5.2) 为正式版本。
+- GitHub Actions [Release run 45335679240](https://github.com/yuchen0x1/AI-QQ-Bot/actions/runs/45335679240) 全部通过；5 个资产均已上传并核对 SHA-256 与 provenance。
