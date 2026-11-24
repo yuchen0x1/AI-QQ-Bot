@@ -1,6 +1,6 @@
 # API
 
-API 前缀为 `/api`，Swagger 为 `/api/docs`，OpenAPI 为 `/api/openapi.json`。除登录、健康检查、Webhook、OneBot 接入外，接口按 JWT + RBAC 保护。浏览器管理台使用登录响应设置的 HttpOnly `qbot_token` Cookie；脚本和外部 API 客户端仍可使用 `Authorization: Bearer <token>`。前端不从 localStorage 读取访问令牌。
+API 前缀为 `/api`，Swagger 为 `/api/docs`，OpenAPI 为 `/api/openapi.json`。除登录、健康检查与签名 Webhook 外，接口按 JWT + RBAC 保护。浏览器管理台使用登录响应设置的 HttpOnly `qbot_token` Cookie；脚本和外部 API 客户端仍可使用 `Authorization: Bearer <token>`。前端不从 localStorage 读取访问令牌。
 
 ## 认证与用户
 
@@ -27,23 +27,11 @@ API 前缀为 `/api`，Swagger 为 `/api/docs`，OpenAPI 为 `/api/openapi.json`
 
 `/accounts` 提供列表、统计、创建/更新/删除、启动/停止/重启、批量动作、能力、连接测试、日志和消息统计；`/groups` 提供列表/详情、群设置、同步群列表/成员、禁言/踢出等动作；`/messages` 提供查询、统计和发送；`/requests` 提供申请分页与审批决定。
 
-创建 / 更新账号时通过 `protocol` 选择接入方式：
-
-| protocol | 必填字段 | 说明 |
-|---|---|---|
-| `qq_official`（默认） | `app_id`、`app_secret` | QQ 官方机器人开放平台；`connection_mode` 固定为 `official_ws` |
-| `onebot11` | `api_base`；`ws_client` 模式还需 `ws_url` | 旧版 NapCat / Lagrange 兼容通道 |
-| `mock` | 无 | 仅本地测试 |
+当前只支持 QQ 官方机器人接入：`protocol=qq_official`（默认且唯一允许值），创建 / 更新账号必须提供 `app_id`、`app_secret`，`connection_mode` 固定为 `official_ws`。旧版 OneBot / mock 协议不再接受，请求会返回 422；服务端也不提供 OneBot 回调端点。
 
 官方账号可选字段：`official_sandbox`（沙箱环境）、`official_intents`（事件订阅位值，默认 `33554432` = `1<<25`）、`official_allow_proactive`（允许主动消息，默认 true）、`official_api_base`（覆盖 OpenAPI 域名）。`app_secret` 与 `access_token` 均加密存储，接口只回显 `has_secret` / `has_token`；编辑时传空字符串表示保持不变。
 
-`GET /accounts/{id}/capabilities` 会按协议返回真实能力；官方平台不支持禁言、踢人、改群名/公告/名片、设管理员、撤回、审批申请与全量列表查询。`POST /accounts/{id}/test-connection` 对官方账号只校验凭据与 `/gateway` 可达性，不占用长连接会话额度。
-
-OneBot v11 协议端点（仅旧接入使用，官方机器人由 backend 主动连接平台 Gateway，无需下列回调）：
-
-- `POST /onebot/v11/events/{account_uid}`：HTTP 事件上报。
-- `WS /onebot/v11/ws/{account_uid}`：反向 WebSocket 事件流。
-- 两者均使用 query `access_token` 或 Bearer token 做 fail-closed 校验；账号未配置 token 时拒绝接入。
+`GET /accounts/{id}/capabilities` 会返回官方平台的实际能力；官方平台不支持禁言、踢人、改群名/公告/名片、设管理员、撤回、审批申请与全量列表查询。`POST /accounts/{id}/test-connection` 对官方账号只校验凭据与 `/gateway` 可达性，不占用长连接会话额度。
 
 QQ 官方机器人 Webhook 回调（免登录态，由 Ed25519 签名保护）：
 

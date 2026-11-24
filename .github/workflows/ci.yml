@@ -22,6 +22,25 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Check release metadata consistency (tag target)
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: python scripts/check_release_consistency.py --repo "${{ github.repository }}" --tag "$GITHUB_REF_NAME"
+      - name: Check release metadata consistency (README)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: python scripts/check_release_consistency.py --repo "${{ github.repository }}"
+      - name: Verify README against latest stable GitHub Release
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${{ github.repository }}/releases/latest" > "$RUNNER_TEMP/latest-release.json"; then
+            python scripts/check_release_consistency.py \
+              --repo "${{ github.repository }}" \
+              --release-json "$RUNNER_TEMP/latest-release.json" \
+              --require-remote
+          else
+            echo "::warning::GitHub Releases API unavailable; remote release metadata was not verified."
+          fi
 
   backend:
     name: Backend tests and lint

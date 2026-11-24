@@ -14,8 +14,8 @@ FastAPI backend ── SQLAlchemy Async ── PostgreSQL(生产)/SQLite(本地�
         ├─ AI Provider：OpenAI 兼容、Anthropic、Gemini、Ollama
         ├─ Repository Monitor：GitHub/Gitee 轮询、GitHub Webhook、Release、去重、QQ 推送
         ├─ SchedulerService：APScheduler、任务记录、重试
-        └─ EventHub：进程内事件广播、日志/状态 WebSocket
-Redis(Compose 默认启用，队列能力预留)
+        └─ EventHub：事件广播（默认进程内，可选 Redis 跨实例）、日志/状态 WebSocket
+Redis(Compose 默认启用；事件广播 + 队列能力)
 ```
 
 QQ 官方机器人支持两种事件接入，账号表单「回调方式」决定：**WebSocket 模式**由 backend 主动外连：AppID + AppSecret → `POST https://bots.qq.com/app/getAppAccessToken` → `GET /gateway` → WebSocket 连接 → OpCode 10 Hello → OpCode 2 Identify（Intents `1<<25`）→ READY → 应用层心跳（OpCode 1/11）。断线优先发 OpCode 6 Resume 恢复会话，收到 OpCode 7/9 则重新 Identify。**Webhook 模式**不建长连接：`POST /api/qqbot/webhook/{app_id}`（另有 `X-Bot-Appid` 头路由与 Nginx `=/webhook` 兼容转发）先处理 `op=13` 地址验证（AppSecret 派生 Ed25519 seed，签 `event_ts+plain_token` 返回），再对 `op=0` 事件用公钥验签 `timestamp+原始body`（默认 300 秒时间窗），通过后 `feed_event` 注入与 WebSocket 完全相同的事件队列，账号未在线返回 503 交由平台重试。事件主要为 `GROUP_AT_MESSAGE_CREATE`、`C2C_MESSAGE_CREATE`、`GROUP_ADD_ROBOT/DEL_ROBOT`、`FRIEND_ADD/DEL`。
@@ -30,7 +30,7 @@ QQ 官方机器人支持两种事件接入，账号表单「回调方式」决�
 - `app/services/qq_identity.py` + `app/models/account.py::QQOfficialIdentity`：把字符串 OpenID 映射为稳定整数 ID，按账号隔离，`member` 类型带 `scope`（所属群 OpenID）。
 - `app/services/bot_engine.py`：事件落库后按自动管理 → 命令 → AI → 插件钩子处理；不感知底层协议。
 - `app/services/scheduler.py`：随 backend 进程启动（与机器人连接同进程），任务执行直接调用共享业务服务；发送类任务不能投递给 worker。
-- `app/core/events.py`：进程内事件信封为 `type/id/time/data`，当前不提供跨进程广播。
+- `app/core/events.py`：事件信封为 `type/id/time/data`；默认进程内广播，`REDIS_ENABLED=true` 时由 `RedisEventBroker` 跨实例转发。
 - `app/services/github/oauth.py`：GitHub OAuth 授权。`state` 是 10 分钟有效、带用途声明的签名 JWT（含平台用户 ID 与站内 `next`），无需落库即可跨副本校验；code 换 Token、拉取账号信息与仓库列表；Token 用 Fernet 加密后写入 `user_github_tokens`，接口只回显登录名与授权范围。OAuth App 凭据优先读 `system_settings.github_oauth`，其次读环境变量。
 - `app/services/github/registry.py`：仓库创建的唯一入口（网页手动添加与 OAuth 批量导入共用），负责仓库可访问性校验、历史 Release 导入（标记已通知）和轮询任务注册；同时提供 `owner_user_id` 归属判定，普通用户只能看到自己的仓库与历史全局仓库。
 - `app/services/github/monitor.py`：`resolve_repo_token()` 决定调用凭据——仓库自带 PAT → 归属用户绑定的 OAuth Token → 全局 `GITHUB_TOKEN`，因此 OAuth 导入的仓库不复制凭据，重新授权/解绑后下一轮轮询即生效。
@@ -49,4 +49,4 @@ Compose 服务为 `postgres`、`redis`、`backend`、`frontend`、`nginx`（back
 
 ## 扩展边界
 
-`QQAdapter` 是唯一协议适配边界；不支持的动作通过能力检测返回明确错误，绝不假装成功。官方平台缺少的能力（群管理、申请审批、全量列表、撤回）在能力页标记为不支持；自动审核中的 mute/kick 会降级为记录日志。插件通过清单声明权限和按账号/群绑定，但动态 Python 插件仍必须在受信环境运行。水平扩展前需将连接管理与 EventHub 迁移到独立连接服务和共享事件/租约机制。GitHub OAuth 的 `state` 用 `SECRET_KEY` 签名，多副本部署天然一致；`user_github_tokens` 的 Token 轮换由用户重新授权完成，不需要额外的刷新任务。
+`QQAdapter` 是唯一协议适配边界；不支持的动作通过能力检测返回明确错误，绝不假装成功。官方平台缺少的能力（群管理、申请审批、全量列表、撤回）在能力页标记为不支持；自动审核中的 mute/kick 会降级为记录日志。插件通过清单声明权限和按账号/群绑定，但动态 Python 插件仍必须在受信环境运行。水平扩展前需将机器人连接管理迁移到独立连接服务并补充分布式租约；EventHub 已有可选 Redis 跨实例转发，但仍需真实多实例验收。GitHub OAuth 的 `state` 用 `SECRET_KEY` 签名，多副本部署天然一致；`user_github_tokens` 的 Token 轮换由用户重新授权完成，不需要额外的刷新任务。

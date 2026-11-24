@@ -67,7 +67,7 @@ sudo journalctl -u qbot -n 50 --no-pager
 ## 发布新版本
 
 1. 在 `main` 上完成代码、测试和文档。
-2. 将后端 `backend/app/core/version.py`、前端 `frontend/package.json` 及 `frontend/package-lock.json` 更新为同一 SemVer 版本；在 `docs/releases/release-notes.md` 添加对应版本的更新说明。
+2. 将后端 `backend/app/core/version.py`、前端 `frontend/package.json` 及 `frontend/package-lock.json` 更新为同一 SemVer 版本；在 `docs/releases/release-notes.md` 添加对应版本的更新说明，并运行 `python scripts/check_release_consistency.py --repo yuchen0x1/AI-QQ-Bot --tag vX.Y.Z` 预检目标版本。
 3. 提交并推送 `main`，确认 CI 通过。
 4. 创建并推送标签：
 
@@ -76,7 +76,7 @@ sudo journalctl -u qbot -n 50 --no-pager
    git push origin v1.1.1
    ```
 
-5. `release.yml` 会校验标签与前后端、锁文件版本一致且存在对应的更新说明；复用 CI 运行后端测试/Ruff、前端构建和 Compose smoke，再生成源码、ZIP 上传包、带完整前端的 `qbot-ai-<version>-native.tar.gz` 升级包、`SHA256SUMS` 与 `provenance.sigstore.json`，最后使用对应版本的更新说明创建 Release。将附件下载到同一目录即可执行 `sha256sum -c SHA256SUMS`；原生升级服务还会用 GitHub CLI 验证 `native.tar.gz` 的构建来源证明。
+5. `release.yml` 会校验标签与前后端、锁文件版本一致且存在对应的更新说明；复用 CI 运行后端测试/Ruff、前端构建和 Compose smoke，再生成源码、ZIP 上传包、带完整前端的 `qbot-ai-<version>-native.tar.gz` 升级包、`SHA256SUMS` 与 `provenance.sigstore.json`，最后使用对应版本的更新说明创建 Release。Tag 构建中的 CI 会以实际标签执行一致性检查；普通分支和 PR 会对照 GitHub latest Release 检查 README，API 不可用时明确标记远程状态未验证。将附件下载到同一目录即可执行 `sha256sum -c SHA256SUMS`；原生升级服务还会用 GitHub CLI 验证 `native.tar.gz` 的构建来源证明。
 
 工作流不会覆盖已有 Release；同名标签的发布失败后应修复工作流或重新选择未占用版本号。正式发布仍需要维护者明确创建标签，不会因普通 push 自动发布。
 
