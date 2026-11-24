@@ -13,7 +13,7 @@ from app.models import ScheduledTask, TaskRecord, User
 from app.schemas.common import MessageOut, Page
 from app.schemas.task import TaskCreate, TaskOut, TaskRecordOut, TaskUpdate
 from app.services.logs import audit
-from app.services.scheduler import TASK_HANDLERS, scheduler_service
+from app.services.scheduler import TASK_HANDLERS, scheduler_service, validate_task_schedule
 
 router = APIRouter(prefix="/tasks", tags=["自动化任务"])
 
@@ -59,6 +59,14 @@ async def create_task(
 ):
     if payload.task_type not in TASK_HANDLERS:
         raise HTTPException(status_code=400, detail="不支持的任务类型")
+    try:
+        validate_task_schedule(
+            schedule_kind=payload.schedule_kind,
+            interval_seconds=payload.interval_seconds,
+            cron_expr=payload.cron_expr,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     task = ScheduledTask(
         name=payload.name,
         task_type=payload.task_type,
@@ -87,7 +95,16 @@ async def update_task(
     task = await db.get(ScheduledTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    try:
+        validate_task_schedule(
+            schedule_kind=data.get("schedule_kind", task.schedule_kind),
+            interval_seconds=data.get("interval_seconds", task.interval_seconds),
+            cron_expr=data.get("cron_expr", task.cron_expr),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    for field, value in data.items():
         setattr(task, field, value)
     await db.commit()
     await db.refresh(task)

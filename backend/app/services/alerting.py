@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import ipaddress
+import socket
 from urllib.parse import urlsplit
 import time
 from typing import Any
@@ -24,7 +25,13 @@ DEBOUNCE_SECONDS = 180.0
 _last_sent: dict[str, float] = {}
 
 
-def validate_webhook_url(url: str, *, allow_private: bool | None = None) -> tuple[bool, str]:
+def validate_webhook_url(
+    url: str,
+    *,
+    allow_private: bool | None = None,
+    resolve: bool = True,
+    allow_unresolved: bool = False,
+) -> tuple[bool, str]:
     """校验告警回调地址，阻断常见 SSRF 目标。
 
     告警地址由管理员在控制台配置，但后台进程仍不应被借此访问本机、云元数据
@@ -63,6 +70,37 @@ def validate_webhook_url(url: str, *, allow_private: bool | None = None) -> tupl
         or address.is_unspecified
     ):
         return False, "Webhook 不允许访问私有、回环或保留 IP 地址"
+    if not address and not private_allowed and resolve:
+        # A hostname can resolve to 127.0.0.1, a cloud metadata address, or a
+        # container/private network even when its literal spelling looks
+        # public.  Validate every returned address instead of trusting only
+        # the hostname.  The check is repeated immediately before sending;
+        # redirects are disabled there to avoid an obvious validation bypass.
+        try:
+            resolved = {
+                ipaddress.ip_address(item[4][0])
+                for item in socket.getaddrinfo(host, port or (443 if parsed.scheme.lower() == "https" else 80), type=socket.SOCK_STREAM)
+            }
+        except (OSError, ValueError) as exc:
+            # A public hostname may be temporarily unresolvable on an offline
+            # developer machine or in DNS-isolated tests. That is not proof of
+            # a private target. Configuration validators can opt into allowing
+            # that case; the actual send path still uses the strict default.
+            if allow_unresolved:
+                return True, ""
+            return False, f"Webhook 主机无法解析：{exc}"
+        if not resolved:
+            return False, "Webhook 主机无法解析"
+        if any(
+            item.is_private
+            or item.is_loopback
+            or item.is_link_local
+            or item.is_reserved
+            or item.is_multicast
+            or item.is_unspecified
+            for item in resolved
+        ):
+            return False, "Webhook 主机解析到私有、回环或保留 IP 地址"
     _ = port
     return True, ""
 
@@ -150,7 +188,7 @@ async def send_alert(title: str, content: str, *, force: bool = False) -> bool:
                 return False
             channel_type = str(await read_setting(db, "alert_channel_type", "auto") or "auto")
 
-        valid, reason = validate_webhook_url(webhook_url)
+        valid, reason = validate_webhook_url(webhook_url, allow_unresolved=False)
         if not valid:
             logger.warning("告警 Webhook 地址被拒绝：%s", reason)
             return False
@@ -158,7 +196,7 @@ async def send_alert(title: str, content: str, *, force: bool = False) -> bool:
         channel = _detect_channel(webhook_url, channel_type)
         payload = _build_payload(channel, title, content)
 
-        async with new_client(timeout=10.0) as client:
+        async with new_client(timeout=10.0, follow_redirects=False) as client:
             resp = await client.post(webhook_url, json=payload)
             if resp.status_code >= 400:
                 logger.warning("推送告警失败 HTTP %s: %s", resp.status_code, resp.text[:200])

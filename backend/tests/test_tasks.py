@@ -86,6 +86,20 @@ async def test_cron_validation(client: httpx.AsyncClient, admin_headers: dict):
     )
     assert cron.status_code == 201, cron.text
 
+    invalid_cron = await client.put(
+        f"/api/tasks/{cron.json()['id']}",
+        headers=admin_headers,
+        json={"cron_expr": "not a cron"},
+    )
+    assert invalid_cron.status_code == 422, invalid_cron.text
+
+    missing_cron = await client.put(
+        f"/api/tasks/{cron.json()['id']}",
+        headers=admin_headers,
+        json={"schedule_kind": "cron", "cron_expr": None},
+    )
+    assert missing_cron.status_code == 422, missing_cron.text
+
     unknown = await client.post(
         "/api/tasks",
         headers=admin_headers,

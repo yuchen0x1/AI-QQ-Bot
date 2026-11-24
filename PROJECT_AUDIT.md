@@ -1,10 +1,10 @@
 # PROJECT_AUDIT
 
-审计日期：2026-11-19（Asia/Shanghai）
-仓库：`E:\移动云盘同步盘\QQ 机器人管理台`
+审计日期：2026-11-24（Asia/Shanghai）
+仓库：`https://github.com/yuchen0x1/AI-QQ-Bot`
 分支：`main`
-HEAD：`9dde09f docs: align project information with published releases [skip ci]`
-应用版本：后端 `1.4.12`，前端 `1.4.12`
+HEAD：`c50e026 fix: allow license in native upgrade bundle`
+基线应用版本：后端 `1.5.0`，前端 `1.5.0`（本工作区在独立升级分支上包含尚未发布的修复）
 
 ## 1. 项目定位
 
@@ -50,13 +50,18 @@ QBot AI 是面向 Linux 服务器的多账号 QQ 机器人管理平台。它把 
 8. GitHub 与 QQ Webhook 的后端读取路径缺少应用层 body 上限；Nginx 限制不能覆盖直连或错误代理配置。
 9. 通用资源列表和仪表盘部分加载失败只留下空表/默认数字，没有明确重试入口。
 10. 宣传站 favicon 是损坏的占位 URL，移动端在 640px 以下隐藏了大部分导航入口。
+11. GitHub 版本检查在无关的失效 `GITHUB_TOKEN` 返回 401 时会自动匿名重试；Release 发布器改为按创建出的 release ID 上传和核对资产，并拒绝同标签重复发布。
+12. 原生升级包的允许列表补充仓库 `LICENSE`，避免可安装包缺少许可证文件。
+13. AI 群总结原先只按群号跨账号取消息，可能把另一机器人账号同号群的消息纳入总结；现在强制按 `account_id + group_number` 查询。
+14. Redis 队列原先 `BRPOP` 取走即删除，Worker 崩溃会丢失任务；现在 processing lease、ACK/NACK、重试计数、死信队列和启动恢复均有实现与测试。
+15. 告警 Webhook 只检查字面量 URL，域名可解析到私网且 HTTP 重定向可能绕过校验；现在发送前检查全部解析结果并禁用重定向，普通日志也统一脱敏。
 
 ### 仍然存在的高风险/结构性问题
 
-- Webhook DNS 校验后到请求发送之间仍有 DNS rebinding 风险；需要固定解析结果或出站防火墙。
+- Webhook DNS 校验后到请求发送之间仍有 DNS rebinding 风险；需要固定解析结果或出站防火墙。配置态允许域名暂时解析失败以免本地测试依赖外部 DNS，实际发送仍严格校验。
 - QQ 事件去重主要是进程内集合，重启或多副本可能重复落库/回复；需要数据库级事件幂等键。
 - 多副本 scheduler 没有统一租约，连接绑定任务不能简单交给独立 worker；需要分布式调度锁和明确的 owner。
-- WebSocket ticket 文档称一次性，但当前只做短时签名和会话复核，没有持久化消费标记。
+- WebSocket ticket 已在 `v1.5.0` 通过 `ws_tickets` 迁移持久化并一次性消费；仍需在真实多实例部署验证租约和广播边界。
 - 插件是动态 Python 代码，权限上下文是约束接口而不是沙箱；不应加载不受信插件。
 - Release 已增加 GitHub Actions Artifact Attestation 和原生升级前验证；SBOM、容器签名及真实主机验收仍未完成。
 - Docker 基础镜像、apt 包和 Agent Mail CLI 仍未全部按 digest/lock 固定。
@@ -66,13 +71,13 @@ QBot AI 是面向 Linux 服务器的多账号 QQ 机器人管理平台。它把 
 
 | 检查 | 结果 |
 |---|---|
-| `backend` pytest | BLOCKED：当前工作区未提供 `.venv`，系统 Python 未安装 pytest |
-| `backend` Ruff | BLOCKED：当前工作区未提供 `.venv`，系统 Python 未安装 ruff |
-| `backend` compileall + `prepare_release.py --tag v1.4.12` | PASS |
+| `backend` pytest（独立 venv） | PASS：256 passed、1 skipped、0 failed |
+| `backend` Ruff（独立 venv） | PASS：`ruff check app tests migrations` |
+| `backend` compileall + `prepare_release.py --tag v1.5.0` | PASS |
 | `npm run build`（frontend） | PASS：vue-tsc + Vite，2383 modules transformed |
 | `docker compose --env-file .env.example config --no-env-resolution --quiet` | PASS |
-| `git diff --check` | PASS；仅有 Windows LF/CRLF 转换提示 |
-| Docker 实际构建/启动 | BLOCKED：本机 Docker Desktop Linux daemon 不可用 |
+| `git diff --check` | PASS |
+| Docker 实际构建/启动 | BLOCKED：当前主机未安装 Docker CLI |
 | 真实 QQ/GitHub Webhook/AI Provider/生产 TLS | NOT RUN：需要外部凭据和服务，未以本地 mock 冒充生产验收 |
 
 ## 6. 成熟度判断

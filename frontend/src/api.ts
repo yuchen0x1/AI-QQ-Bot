@@ -55,6 +55,8 @@ export function useRealtimeSocket<T = Record<string, unknown>>(path: string, opt
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined
   let attempts = 0
   let stopped = false
+  let connecting = false
+  let generation = 0
 
   const url = (ticket: string) => {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -71,8 +73,16 @@ export function useRealtimeSocket<T = Record<string, unknown>>(path: string, opt
     const delay = Math.min(maxDelay, 1000 * 2 ** Math.min(attempts, 4))
     reconnectTimer = setTimeout(() => { reconnectTimer = undefined; connect() }, delay)
   }
+  const fail = (currentGeneration: number) => {
+    if (stopped || currentGeneration !== generation) return
+    attempts += 1
+    state.value = attempts <= QUIET_ATTEMPTS ? 'reconnecting' : 'error'
+    schedule()
+  }
   const connect = async () => {
-    if (stopped || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return
+    if (stopped || connecting || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return
+    const currentGeneration = ++generation
+    connecting = true
     clearTimers()
     state.value = 'connecting'
     let ticket = ''
@@ -80,26 +90,38 @@ export function useRealtimeSocket<T = Record<string, unknown>>(path: string, opt
       const { data } = await api.post<{ ticket: string }>('/ws/ticket')
       ticket = data.ticket
     } catch {
-      attempts += 1
-      state.value = attempts <= QUIET_ATTEMPTS ? 'reconnecting' : 'error'
-      schedule()
+      connecting = false
+      fail(currentGeneration)
       return
     }
-    if (stopped) return
-    try { socket = new WebSocket(url(ticket)) } catch { attempts += 1; state.value = attempts <= QUIET_ATTEMPTS ? 'reconnecting' : 'error'; schedule(); return }
-    socket.onopen = () => {
+    if (stopped || currentGeneration !== generation) {
+      if (currentGeneration === generation) connecting = false
+      return
+    }
+    let currentSocket: WebSocket
+    try { currentSocket = new WebSocket(url(ticket)) } catch {
+      connecting = false
+      fail(currentGeneration)
+      return
+    }
+    socket = currentSocket
+    connecting = false
+    currentSocket.onopen = () => {
+      if (stopped || currentGeneration !== generation) { currentSocket.close(); return }
       attempts = 0
       state.value = 'open'
       heartbeatTimer = setInterval(() => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'ping' })) }, 20000)
     }
-    socket.onmessage = (event) => {
+    currentSocket.onmessage = (event) => {
+      if (stopped || currentGeneration !== generation) return
       try { lastMessage.value = JSON.parse(event.data) as T } catch { /* 忽略非 JSON 推送 */ }
     }
     // onerror 一定紧跟 onclose，这里只把「已连接」降级为「重连中」，
     // 真正的失败判定交给 onclose 的尝试次数，避免闪一下「连接异常」。
-    socket.onerror = () => { if (state.value === 'open') state.value = 'reconnecting' }
-    socket.onclose = () => {
-      socket = null
+    currentSocket.onerror = () => { if (currentGeneration === generation && state.value === 'open') state.value = 'reconnecting' }
+    currentSocket.onclose = () => {
+      if (currentGeneration !== generation) return
+      if (socket === currentSocket) socket = null
       clearTimers()
       if (stopped) { state.value = 'closed'; return }
       attempts += 1
@@ -107,8 +129,27 @@ export function useRealtimeSocket<T = Record<string, unknown>>(path: string, opt
       schedule()
     }
   }
-  const close = () => { stopped = true; clearTimers(); socket?.close(); socket = null; state.value = 'closed' }
-  const reconnect = () => { stopped = false; attempts = 0; socket?.close(); socket = null; connect() }
+  const close = () => {
+    stopped = true
+    generation += 1
+    connecting = false
+    clearTimers()
+    const currentSocket = socket
+    socket = null
+    currentSocket?.close()
+    state.value = 'closed'
+  }
+  const reconnect = () => {
+    stopped = false
+    attempts = 0
+    generation += 1
+    connecting = false
+    clearTimers()
+    const currentSocket = socket
+    socket = null
+    currentSocket?.close()
+    void connect()
+  }
   onMounted(connect)
   onBeforeUnmount(close)
   return { state, lastMessage, reconnect, close }

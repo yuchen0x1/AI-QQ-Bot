@@ -42,7 +42,6 @@ const loading = ref(false), data = ref<any>(), system = ref<any>(), loadError = 
 const status = useStatusStore()
 const { state: socketState, payload: socketPayload } = storeToRefs(status)
 const realtime = { state: socketState, lastMessage: socketPayload, reconnect: status.reconnect }
-onMounted(() => { status.acquire() })
 const metrics = computed(() => [
   { label: 'QQ 账号', value: data.value?.accounts_total ?? 0, foot: `${data.value?.accounts_online ?? 0} 个在线`, hint: `${data.value?.accounts_offline ?? 0} 个离线`, icon: 'Avatar', tone: 'blue', footClass: 'accent' },
   { label: '今日消息', value: data.value?.messages_today ?? 0, foot: `↑ ${data.value?.messages_sent_today ?? 0} 条发送`, hint: '收发合计', icon: 'ChatLineSquare', tone: 'cyan', footClass: 'green-text' },

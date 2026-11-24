@@ -10,9 +10,9 @@
 
 <!-- github-release:start -->
 
-**[v1.4.12](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.4.12)** · 2026-11-18
+**[v1.5.0](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.5.0)** · 2026-11-23
 
-本版本修复全新 PostgreSQL 部署无法启动的问题；Release 现在附带构建来源证明，原生升级服务会在安装前验证证明，管理台在线更新支持安装确认和按版本延后提醒。
+本版本将 WebSocket ticket 改为持久化一次性消费，新增存活/就绪探针、可筛选并脱敏导出的审计日志，以及插件运行指标面板。随后 `main` 又补充了 GitHub 更新鉴权降级、Release 资产发布保护和原生升级包许可证校验；这些变更尚未单独创建新版本。
 
 [全部发行记录](https://github.com/yuchen0x1/AI-QQ-Bot/releases)
 
@@ -138,7 +138,7 @@ npm run build
 
 项目使用 GitHub Releases 作为在线版本源。管理台启动后会检查稳定版本，系统设置页可手动查看当前版本、Release、更新日志、发布资产和 SHA-256；Web 项目不会在浏览器内自动替换服务端文件。推送 `vMAJOR.MINOR.PATCH` 标签后，`.github/workflows/release.yml` 会运行测试、Compose smoke、打包源码并生成 `SHA256SUMS` 与 `provenance.sigstore.json`；服务器按 [在线更新与发布](docs/AUTO_UPDATE.md) 校验后执行 Docker Compose 更新，原生升级服务还会验证构建来源证明。
 
-完整流程、Beta 通道、GitHub Actions、回滚和未配置代码签名的限制见 [docs/AUTO_UPDATE.md](docs/AUTO_UPDATE.md)。
+完整流程、Beta 通道、GitHub Actions、回滚和未配置代码签名的限制见 [docs/AUTO_UPDATE.md](docs/AUTO_UPDATE.md)；维护者发布前请按 [发布检查清单](docs/RELEASE_CHECKLIST.md) 验收。
 
 Vite 开发服务器默认端口 5173，`/api` 代理到 `http://127.0.0.1:8000`。本机 5173 端口若被其他程序占用，Vite 会提示并自动选择下一个可用端口；启动日志会给出实际访问地址。
 

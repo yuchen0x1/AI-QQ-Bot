@@ -237,7 +237,7 @@ async def test_alert(payload: dict, _: User = Depends(require("system:manage")))
     channel_type = str(payload.get("channel_type") or "auto")
     if not url:
         raise HTTPException(status_code=400, detail="缺少 webhook_url")
-    valid, reason = validate_webhook_url(url)
+    valid, reason = validate_webhook_url(url, allow_unresolved=True)
     if not valid:
         raise HTTPException(status_code=400, detail=reason)
 
@@ -245,7 +245,10 @@ async def test_alert(payload: dict, _: User = Depends(require("system:manage")))
     body = _build_payload(channel, "通道连通性测试", "这是一条来自 QBot AI 管理控制台的告警测试消息。如果您收到本条通知，说明系统告警通道配置正常！")
 
     try:
-        async with new_client(timeout=10.0) as client:
+        valid, reason = validate_webhook_url(url, allow_unresolved=False)
+        if not valid:
+            return {"ok": False, "message": reason}
+        async with new_client(timeout=10.0, follow_redirects=False) as client:
             resp = await client.post(url, json=body)
             if resp.status_code >= 400:
                 return {"ok": False, "message": f"平台返回错误 HTTP {resp.status_code}: {resp.text[:200]}"}

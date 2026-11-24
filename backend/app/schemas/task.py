@@ -28,8 +28,8 @@ class TaskCreate(BaseModel):
     task_type: TASK_TYPES
     schedule_kind: Literal["interval", "cron"] = "interval"
     interval_seconds: int | None = Field(default=None, ge=30, le=2592000)
-    cron_expr: str | None = None
-    payload: dict[str, Any] = {}
+    cron_expr: str | None = Field(default=None, max_length=128)
+    payload: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
     max_retries: int = Field(default=2, ge=0, le=5)
     timeout_seconds: int = Field(default=300, ge=10, le=3600)
@@ -44,10 +44,10 @@ class TaskCreate(BaseModel):
 
 
 class TaskUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=190)
     schedule_kind: Literal["interval", "cron"] | None = None
     interval_seconds: int | None = Field(default=None, ge=30, le=2592000)
-    cron_expr: str | None = None
+    cron_expr: str | None = Field(default=None, max_length=128)
     payload: dict[str, Any] | None = None
     enabled: bool | None = None
     max_retries: int | None = Field(default=None, ge=0, le=5)

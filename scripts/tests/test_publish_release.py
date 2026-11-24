@@ -94,7 +94,8 @@ class PublishReleaseTests(unittest.TestCase):
             "notes.md",
         ]
         for name in names:
-            (self.assets_dir / name).write_bytes(f"test asset: {name}".encode())
+            content = f"- test asset: {name}" if name == "notes.md" else f"test asset: {name}"
+            (self.assets_dir / name).write_bytes(content.encode())
         self.env = patch.dict(os.environ, {"GH_HOST": "github.com", "GH_REPO": "github.com/yuchen0x1/AI-QQ-Bot"})
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -159,6 +160,33 @@ class PublishReleaseTests(unittest.TestCase):
 
                 self.assertTrue(api.draft)
                 self.assertFalse(any(method == "PATCH" for method, _ in api.calls))
+
+    def test_empty_notes_fail_before_creating_a_release(self):
+        (self.assets_dir / "notes.md").write_text("\n", encoding="utf-8")
+        api = MockGitHub(self.assets_dir)
+
+        with self.assertRaisesRegex(publish_release.ReleaseError, "at least one non-empty bullet"):
+            publish_release.run(TAG, self.assets_dir, api_call=api)
+
+        self.assertFalse(any(method == "POST" for method, _ in api.calls))
+
+    def test_blank_bullet_fails_before_creating_a_release(self):
+        (self.assets_dir / "notes.md").write_text("-   \n", encoding="utf-8")
+        api = MockGitHub(self.assets_dir)
+
+        with self.assertRaisesRegex(publish_release.ReleaseError, "at least one non-empty bullet"):
+            publish_release.run(TAG, self.assets_dir, api_call=api)
+
+        self.assertFalse(any(method == "POST" for method, _ in api.calls))
+
+    def test_invalid_utf8_notes_fail_before_creating_a_release(self):
+        (self.assets_dir / "notes.md").write_bytes(b"- invalid utf8: \xff")
+        api = MockGitHub(self.assets_dir)
+
+        with self.assertRaisesRegex(publish_release.ReleaseError, "valid UTF-8"):
+            publish_release.run(TAG, self.assets_dir, api_call=api)
+
+        self.assertFalse(any(method == "POST" for method, _ in api.calls))
 
 
 if __name__ == "__main__":

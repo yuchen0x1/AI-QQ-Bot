@@ -64,7 +64,7 @@ async def save_email(payload: MailSettings, db: AsyncSession = Depends(get_db), 
     if payload.enabled and not payload.recipient:
         raise HTTPException(400, "启用邮件告警前请填写收件邮箱")
     if payload.provider == "smtp" and (payload.enabled or payload.smtp_host):
-        valid, reason = validate_webhook_url(f"https://{payload.smtp_host}:{payload.smtp_port}")
+        valid, reason = validate_webhook_url(f"https://{payload.smtp_host}:{payload.smtp_port}", allow_unresolved=True)
         if not valid:
             raise HTTPException(400, f"SMTP 主机无效：{reason}")
         if not payload.smtp_sender:
