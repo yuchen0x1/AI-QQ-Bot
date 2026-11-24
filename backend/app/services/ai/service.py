@@ -60,7 +60,7 @@ async def resolve_model(
     """优先级：显式指定 > 群配置 > 账号配置 > 全局默认 > 第一个启用模型。"""
     if model_id:
         model = await db.get(AIModel, model_id)
-        if model and model.enabled:
+        if model and model.enabled and model.provider and model.provider.enabled:
             return model
 
     if account_id and group_number:
@@ -71,7 +71,7 @@ async def resolve_model(
             settings = await db.scalar(select(GroupSettings).where(GroupSettings.group_id == group.id))
             if settings and settings.ai_model_id:
                 model = await db.get(AIModel, settings.ai_model_id)
-                if model and model.enabled:
+                if model and model.enabled and model.provider and model.provider.enabled:
                     return model
 
     if account_id:
@@ -79,22 +79,44 @@ async def resolve_model(
         if account and account.features:
             candidate = account.features.get("ai_model_id")
             if candidate:
-                model = await db.get(AIModel, int(candidate))
-                if model and model.enabled:
+                try:
+                    model = await db.get(AIModel, int(candidate))
+                except (TypeError, ValueError):
+                    model = None
+                if model and model.enabled and model.provider and model.provider.enabled:
                     return model
 
-    default = await db.scalar(select(AIModel).where(AIModel.is_default.is_(True), AIModel.enabled.is_(True)).limit(1))
+    default = await db.scalar(
+        select(AIModel)
+        .join(AIProvider, AIModel.provider_id == AIProvider.id)
+        .where(
+            AIModel.is_default.is_(True),
+            AIModel.enabled.is_(True),
+            AIProvider.enabled.is_(True),
+        )
+        .order_by(AIModel.priority.asc(), AIModel.id.asc())
+        .limit(1)
+    )
     if default:
         return default
     return await db.scalar(
-        select(AIModel).where(AIModel.enabled.is_(True)).order_by(AIModel.priority.asc(), AIModel.id.asc()).limit(1)
+        select(AIModel)
+        .join(AIProvider, AIModel.provider_id == AIProvider.id)
+        .where(AIModel.enabled.is_(True), AIProvider.enabled.is_(True))
+        .order_by(AIModel.priority.asc(), AIModel.id.asc())
+        .limit(1)
     )
 
 
 async def fallback_models(db: AsyncSession, exclude_id: int | None = None) -> list[AIModel]:
     rows = await db.scalars(
         select(AIModel)
-        .where(AIModel.enabled.is_(True), AIModel.id != (exclude_id or -1))
+        .join(AIProvider, AIModel.provider_id == AIProvider.id)
+        .where(
+            AIModel.enabled.is_(True),
+            AIProvider.enabled.is_(True),
+            AIModel.id != (exclude_id or -1),
+        )
         .order_by(AIModel.is_fallback.desc(), AIModel.priority.asc())
     )
     return list(rows)

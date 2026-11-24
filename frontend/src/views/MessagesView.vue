@@ -59,7 +59,6 @@ import { useStatusStore } from '../stores/status'
 const status = useStatusStore()
 const { state: socketState, payload: socketPayload } = storeToRefs(status)
 const realtime = { state: socketState, lastMessage: socketPayload, reconnect: status.reconnect }
-onMounted(() => { status.acquire() })
 const rows=ref<any[]>([]),accounts=ref<any[]>([]),accountGroups=ref<any[]>([]),groupsLoading=ref(false),loading=ref(false),sending=ref(false),sendDialog=ref(false),formRef=ref(),page=ref(1),pageSize=ref(20),total=ref(0),keyword=ref(''),targetType=ref('group')
 const viewMode = ref<'table' | 'chat'>('table')
 const filters=reactive({account_id:null as number|null,qq_group:null as number|null,direction:''}),form=reactive({account_id:null as number|null,target:'',content:''})

@@ -36,6 +36,13 @@ async def main() -> None:
             pass
     if redis_task_queue.enabled:
         logger.info("后台 Worker 已启动：仅执行不依赖机器人连接的任务")
+        recovered = await redis_task_queue.requeue_stale()
+        if recovered["requeued"] or recovered["dead_lettered"]:
+            logger.warning(
+                "已恢复 Redis processing 队列：重新入队 %s 个，移入死信 %s 个",
+                recovered["requeued"],
+                recovered["dead_lettered"],
+            )
     else:
         logger.warning("后台 Worker 已启动，但 REDIS_QUEUE_ENABLED 未开启，将空转等待；请确认配置")
     worker_task = asyncio.create_task(_consume_queue(stop)) if redis_task_queue.enabled else None
@@ -68,10 +75,13 @@ async def _consume_queue(stop: asyncio.Event) -> None:
                 await scheduler_service.record_skipped(
                     task_id, reason="该任务依赖机器人连接，worker 进程无法执行（adapter 只在 backend 内）"
                 )
+                await redis_task_queue.ack(item)
                 continue
             await scheduler_service.execute_task(task_id, trigger=str(item.get("trigger") or "queue"))
-        except Exception:
+            await redis_task_queue.ack(item)
+        except Exception as exc:
             logger.exception("Redis 队列任务执行失败 task_id=%s", task_id)
+            await redis_task_queue.nack(item, reason=str(exc))
 
 
 if __name__ == "__main__":

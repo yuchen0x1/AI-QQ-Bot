@@ -79,6 +79,13 @@ class HubHandler(logging.Handler):
             pass
 
 
+class MaskingFormatter(logging.Formatter):
+    """Apply the same credential masking to ordinary log sinks."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return mask_text(super().format(record))
+
+
 def setup_logging() -> None:
     log_dir = Path(settings.data_dir) / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -86,7 +93,7 @@ def setup_logging() -> None:
     if getattr(root, "_qbot_configured", False):
         return
     root.setLevel(logging.DEBUG if settings.debug else logging.INFO)
-    fmt = logging.Formatter("%(asctime)s | %(levelname)-7s | %(name)s | %(message)s")
+    fmt = MaskingFormatter("%(asctime)s | %(levelname)-7s | %(name)s | %(message)s")
 
     console = logging.StreamHandler()
     console.setFormatter(fmt)

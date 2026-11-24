@@ -12,5 +12,12 @@ def set_transport(transport: httpx.AsyncBaseTransport | None) -> None:
     _transport = transport
 
 
-def new_client(*, timeout: float = 30.0) -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=timeout, transport=_transport, follow_redirects=True)
+def new_client(*, timeout: float = 30.0, follow_redirects: bool = True) -> httpx.AsyncClient:
+    """Build the shared HTTP client.
+
+    Redirect handling is opt-in per caller rather than being hidden in the
+    transport.  In particular, callers sending credentials or administrator
+    supplied payloads must disable redirects so that a validated public URL
+    cannot silently turn into a request to a private host.
+    """
+    return httpx.AsyncClient(timeout=timeout, transport=_transport, follow_redirects=follow_redirects)

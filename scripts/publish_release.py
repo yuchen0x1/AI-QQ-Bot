@@ -115,6 +115,17 @@ def expected_assets(tag: str, assets_dir: Path) -> dict[str, dict[str, Any]]:
     return assets
 
 
+def release_notes(assets_dir: Path) -> str:
+    """Load non-empty release notes before creating a remote draft."""
+    try:
+        notes = (assets_dir / "notes.md").read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ReleaseError("notes.md must be valid UTF-8") from exc
+    if not notes.strip() or not any(line.startswith("- ") and line[2:].strip() for line in notes.splitlines()):
+        raise ReleaseError("notes.md must contain at least one non-empty bullet")
+    return notes
+
+
 def assert_release_identity(release: Any, tag: str, release_id: int | None = None) -> int:
     if not isinstance(release, dict) or release.get("tag_name") != tag:
         raise ReleaseError(f"GitHub returned a release that does not match {tag}")
@@ -175,7 +186,7 @@ def run(tag: str, assets_dir: Path, api_call: Callable[..., Any] = github_api) -
         identifiers = ", ".join(str(release.get("id", "unknown")) for release in existing)
         raise ReleaseError(f"Release already exists for {tag} (release IDs: {identifiers}); refusing to create another")
 
-    notes = (assets_dir / "notes.md").read_text(encoding="utf-8")
+    notes = release_notes(assets_dir)
     created = api_call(
         f"{base}/releases",
         method="POST",

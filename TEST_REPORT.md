@@ -1,5 +1,9 @@
 # TEST_REPORT
 
+## 2026-11-24 升级分支（尚未发布）
+
+当前独立分支 `codex/upgrade-20261124` 的本地结果见 [TEST_REPORT_2026-11-24.md](TEST_REPORT_2026-11-24.md)：后端 256 passed / 1 skipped、Ruff、compileall、前端生产构建、发布脚本 7 项测试和 `git diff --check` 均通过。Docker 实际启动、真实 QQ/GitHub/AI/SMTP、生产 PostgreSQL/Redis 多实例尚未执行；本分支未创建 Release。
+
 ## v1.4.7 发布：2026-11-15（陈旧动态防迟到播报）
 
 | 状态 | 命令或范围 | 结果 |

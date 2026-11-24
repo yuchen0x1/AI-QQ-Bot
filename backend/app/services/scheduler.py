@@ -120,13 +120,18 @@ async def _task_ai_summary(payload: dict[str, Any]) -> dict[str, Any]:
     account_id = int(payload.get("account_id") or 0)
     group_number = int(payload.get("group_number") or 0)
     hours = int(payload.get("hours") or 12)
-    if not group_number:
-        raise ValueError("AI 总结任务缺少 group_number")
+    if not account_id or not group_number:
+        raise ValueError("AI 总结任务缺少 account_id / group_number")
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
     async with SessionLocal() as db:
         rows = await db.scalars(
             select(Message)
-            .where(Message.qq_group == group_number, Message.created_at >= since, Message.direction == "in")
+            .where(
+                Message.account_id == account_id,
+                Message.qq_group == group_number,
+                Message.created_at >= since,
+                Message.direction == "in",
+            )
             .order_by(Message.id.desc())
             .limit(200)
         )
@@ -292,6 +297,24 @@ CONNECTION_BOUND_TASKS: frozenset[str] = frozenset(
 )
 
 
+def validate_task_schedule(
+    *, schedule_kind: str, interval_seconds: int | None, cron_expr: str | None
+) -> None:
+    """Validate persisted scheduling values before they reach APScheduler."""
+    if schedule_kind == "cron":
+        if not cron_expr or not cron_expr.strip():
+            raise ValueError("cron 模式必须填写 cron 表达式")
+        try:
+            CronTrigger.from_crontab(cron_expr.strip(), timezone=settings.scheduler_timezone)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"cron 表达式无效：{exc}") from exc
+        return
+    if schedule_kind != "interval":
+        raise ValueError("不支持的调度模式")
+    if interval_seconds is None or not 30 <= int(interval_seconds) <= 2592000:
+        raise ValueError("interval 模式的执行间隔必须在 30 到 2592000 秒之间")
+
+
 # ---------------------------------------------------------------------------
 # 调度器
 # ---------------------------------------------------------------------------
@@ -363,14 +386,18 @@ class SchedulerService:
         self._add(f"task:{task.id}", self._execute_job, trigger, {"task_id": task.id})
 
     def _build_trigger(self, task: ScheduledTask):
-        if task.schedule_kind == "cron" and task.cron_expr:
-            try:
-                return CronTrigger.from_crontab(task.cron_expr, timezone=settings.scheduler_timezone)
-            except ValueError as exc:
-                logger.warning("cron 表达式无效：%s (%s)", task.cron_expr, exc)
-                return None
-        interval = task.interval_seconds or 300
-        return IntervalTrigger(seconds=interval, timezone=settings.scheduler_timezone)
+        try:
+            validate_task_schedule(
+                schedule_kind=task.schedule_kind,
+                interval_seconds=task.interval_seconds,
+                cron_expr=task.cron_expr,
+            )
+        except ValueError as exc:
+            logger.warning("任务 %s 的触发器配置无效：%s", task.name, exc)
+            return None
+        if task.schedule_kind == "cron":
+            return CronTrigger.from_crontab(task.cron_expr or "", timezone=settings.scheduler_timezone)
+        return IntervalTrigger(seconds=task.interval_seconds or 300, timezone=settings.scheduler_timezone)
 
     def unschedule_task(self, task_id: int) -> None:
         job = self.scheduler.get_job(f"task:{task_id}")

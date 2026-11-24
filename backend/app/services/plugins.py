@@ -158,7 +158,10 @@ class PluginManager:
             return found
         for entry in sorted(root.iterdir()):
             manifest_path = entry / "plugin.json"
-            if not entry.is_dir() or not manifest_path.exists():
+            # Never follow a plugin directory or manifest symlink.  A plugin
+            # is executable code in the server process, so a symlink could
+            # otherwise make an unrelated file tree loadable by ``sync``.
+            if entry.is_symlink() or not entry.is_dir() or manifest_path.is_symlink() or not manifest_path.exists():
                 continue
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -204,7 +207,7 @@ class PluginManager:
     # ------------------------------------------------------------------
     def load_one(self, plugin: Plugin) -> LoadedPlugin | None:
         path = Path(plugin.path or "") / "main.py"
-        if not path.exists():
+        if path.is_symlink() or not path.is_file():
             plugin.load_status = "missing"
             plugin.load_error = "未找到 main.py"
             return None
@@ -219,6 +222,9 @@ class PluginManager:
             if not callable(register):
                 raise AttributeError("插件必须实现 register(ctx) 函数")
             permissions = set(plugin.permissions or [])
+            unknown_permissions = permissions - ALLOWED_PERMISSIONS
+            if unknown_permissions:
+                raise ValueError("插件声明了不受支持的权限：" + ", ".join(sorted(unknown_permissions)))
             ctx = PluginContext(plugin_id=plugin.plugin_id, config=dict(plugin.config or {}), permissions=permissions)
             ctx.permission_audit = lambda permission, allowed, plugin_id=plugin.plugin_id: self.record_permission_check(
                 plugin_id, permission, allowed

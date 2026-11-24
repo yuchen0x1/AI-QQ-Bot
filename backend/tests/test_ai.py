@@ -162,6 +162,55 @@ async def test_sync_models_reports_unreachable_provider(client: httpx.AsyncClien
     assert "获取模型列表失败" in result["message"]
 
 
+async def test_disabled_provider_is_not_selected(client: httpx.AsyncClient, admin_headers: dict, db):
+    model = await _create_model(client, admin_headers, name="disabled-provider-probe", model_name="disabled-model")
+    provider_id = model["provider_id"]
+    disabled = await client.put(
+        f"/api/ai/providers/{provider_id}",
+        headers=admin_headers,
+        json={"enabled": False},
+    )
+    assert disabled.status_code == 200, disabled.text
+
+    from app.services.ai.service import resolve_model
+
+    resolved = await resolve_model(db, model_id=model["id"])
+    assert resolved is None or resolved.id != model["id"]
+
+
+async def test_ai_summary_task_scopes_messages_by_account(client: httpx.AsyncClient, admin_headers: dict, db):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import Account, Message
+    from app.services.scheduler import _task_ai_summary
+
+    await _create_model(client, admin_headers, name="summary-task-provider", model_name="summary-task-model", is_default=True)
+    now = datetime.now(timezone.utc)
+    group_number = 500001
+    account = Account(account_id="summary-main", name="summary-main", protocol="qq_official",
+                      app_id="999000001", app_secret_enc="x", enabled=False)
+    sibling = Account(account_id="summary-other", name="summary-other", protocol="qq_official",
+                      app_id="999000002", app_secret_enc="x", enabled=False)
+    db.add_all([account, sibling])
+    await db.flush()
+    db.add_all([
+        Message(account_id=account.id, qq_group=group_number, direction="in", message_type="group",
+                sender_name="本机群友", content="只应总结这条", created_at=now - timedelta(minutes=2)),
+        Message(account_id=sibling.id, qq_group=group_number, direction="in", message_type="group",
+                sender_name="另一账号群友", content="跨账号秘密不应出现", created_at=now - timedelta(minutes=1)),
+    ])
+    await db.commit()
+
+    summary = await _task_ai_summary({
+        "account_id": account.id,
+        "group_number": group_number,
+        "hours": 1,
+        "send_to_group": False,
+    })
+    assert summary["messages"] == 1
+    assert summary["summary"] == "这是测试模型的回复"
+
+
 async def test_onboarding_ai_step_ready_when_model_configured(client: httpx.AsyncClient, admin_headers: dict):
     await _create_model(client, admin_headers, name="onboarding-guide-probe", model_name="gpt-test-chat")
     state = (await client.get("/api/onboarding", headers=admin_headers)).json()
