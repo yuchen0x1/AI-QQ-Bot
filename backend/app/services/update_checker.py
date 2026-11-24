@@ -109,15 +109,24 @@ async def check_for_update(channel: str | None = None) -> dict[str, Any]:
     try:
         owner, name = parse_repo_url(settings.update_repository)
         client = GithubClient()
-        if requested_channel == "stable":
-            release = await client.get_latest_release(owner, name)
-        else:
-            releases = await client.list_releases(owner, name, per_page=50)
+
+        async def fetch_release(api_client: GithubClient) -> dict[str, Any]:
+            if requested_channel == "stable":
+                return await api_client.get_latest_release(owner, name)
+            releases = await api_client.list_releases(owner, name, per_page=50)
             candidates = [r for r in releases if not r.get("draft")]
             candidates.sort(key=lambda r: str(r.get("published_at") or ""), reverse=True)
             release = next((r for r in candidates if r.get("prerelease") or r.get("tag_name")), None)
             if not release:
                 raise GithubError("没有可用的 Beta Release", 404)
+            return release
+
+        try:
+            release = await fetch_release(client)
+        except GithubError as exc:
+            if exc.status_code != 401 or not client.token:
+                raise
+            release = await fetch_release(GithubClient(anonymous=True))
         payload = _release_payload(release, channel=requested_channel)
         compare_versions(APP_VERSION, payload["version"])
         base.update(payload)

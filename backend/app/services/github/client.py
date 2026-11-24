@@ -42,8 +42,15 @@ def parse_repo_url(url: str) -> tuple[str, str]:
 class GithubClient:
     name = "github"
 
-    def __init__(self, token: str | None = None, *, api_base: str | None = None, timeout: float = 20.0) -> None:
-        self.token = token or settings.github_token
+    def __init__(
+        self,
+        token: str | None = None,
+        *,
+        api_base: str | None = None,
+        timeout: float = 20.0,
+        anonymous: bool = False,
+    ) -> None:
+        self.token = None if anonymous else (token or settings.github_token)
         self.api_base = (api_base or settings.github_api_base).rstrip("/")
         self.timeout = timeout
         self.rate_limit_remaining: int | None = None

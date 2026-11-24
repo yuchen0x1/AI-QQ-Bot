@@ -74,6 +74,34 @@ async def test_check_for_update_failure_does_not_raise() -> None:
     assert result["error"]
 
 
+async def test_check_for_update_retries_anonymously_after_invalid_global_token() -> None:
+    original_token = settings.github_token
+    settings.github_token = "expired-token"
+    requests: list[bool] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        has_auth = "authorization" in request.headers
+        requests.append(has_auth)
+        if has_auth:
+            return httpx.Response(401, json={"message": "Bad credentials"})
+        return httpx.Response(200, json={
+            "tag_name": "v9.9.9",
+            "html_url": "https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v9.9.9",
+            "published_at": "2026-11-12T00:00:00Z",
+            "prerelease": False,
+            "assets": [],
+        })
+
+    set_transport(httpx.MockTransport(handler))
+    try:
+        result = await check_for_update()
+    finally:
+        set_transport(None)
+        settings.github_token = original_token
+    assert result["ok"] is True
+    assert requests == [True, False]
+
+
 async def test_update_endpoint_returns_safe_release_metadata(client, admin_headers) -> None:
     release = {
         "tag_name": "v9.9.9",

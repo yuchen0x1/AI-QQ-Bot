@@ -24,6 +24,22 @@ UPDATE_CHECK_INTERVAL_MINUTES=360
 
 更新接口返回当前版本、最新版本、Release 地址、发布时间、更新日志、资产大小和 GitHub 提供的 SHA-256 digest（若资产存在）。下载地址只接受 HTTPS GitHub 资产地址。
 
+### GitHub 认证与 401 排障
+
+公开仓库的版本检查不需要 Token。`GITHUB_TOKEN` 主要供 GitHub 仓库监控使用；如果服务器上配置了过期、复制错误或已撤销的值，版本检查在收到一次 `401 Bad credentials` 后会自动改用匿名请求重试，不会把本机 Git 凭据带到服务器。Windows 凭据管理器只服务于本机 Git 客户端，不能作为 Linux 服务器调用 GitHub API 的凭据。
+
+服务器仍应清理无效 Token，或按仓库监控所需权限重新生成 Fine-grained Token，然后重启 backend：
+
+```bash
+# 不要把 Token 写入命令历史；只在受保护的 qbot.env 中修改
+sudoedit /etc/qbot/qbot.env
+sudo systemctl restart qbot
+# 登录管理台后点击「系统设置 → 在线更新」验证；也可查看后端日志
+sudo journalctl -u qbot -n 50 --no-pager
+```
+
+如需确认 Token 是否有效，请在服务器上使用临时环境变量调用 GitHub `user` 接口；不要把返回内容或 Token 写入日志。私有更新仓库必须配置可访问该仓库的 Token；公开更新仓库建议留空 `GITHUB_TOKEN`，以避免无关 Token 失效影响版本检查。
+
 ## 国内服务器加速
 
 服务器位于中国大陆时，GitHub 直连（尤其是 Release 资产下载）经常被限速或中断。原生升级服务支持在不降低安全要求的前提下走镜像加速，全部配置都在 root 独占的 `/etc/qbot/updater.json`（修改后执行 `sudo systemctl restart qbot-updater`）：
@@ -61,6 +77,17 @@ UPDATE_CHECK_INTERVAL_MINUTES=360
 5. `release.yml` 会校验标签与前后端、锁文件版本一致且存在对应的更新说明；复用 CI 运行后端测试/Ruff、前端构建和 Compose smoke，再生成源码、ZIP 上传包、带完整前端的 `qbot-ai-<version>-native.tar.gz` 升级包、`SHA256SUMS` 与 `provenance.sigstore.json`，最后使用对应版本的更新说明创建 Release。将附件下载到同一目录即可执行 `sha256sum -c SHA256SUMS`；原生升级服务还会用 GitHub CLI 验证 `native.tar.gz` 的构建来源证明。
 
 工作流不会覆盖已有 Release；同名标签的发布失败后应修复工作流或重新选择未占用版本号。正式发布仍需要维护者明确创建标签，不会因普通 push 自动发布。
+
+如果发布工作流在上传资产或校验阶段失败，先检查同名草稿，不要重复点击创建 Release：保留资产完整且标签匹配的那一个，删除空草稿和重复草稿，再重新运行修复后的工作流。发布前可用以下命令盘点本地状态；不要删除仍对应开放 Dependabot PR 的远端分支：
+
+```bash
+git status --short --branch
+git branch -a -vv
+git fetch --prune origin
+gh release list --repo yuchen0x1/AI-QQ-Bot --limit 20
+```
+
+本地仅保留 `main` 作为发布分支；功能和依赖更新通过 PR 合并后由 GitHub/Dependabot 自动清理远端分支。历史标签不强制重写，避免破坏已发布版本的构建证明。
 
 ## 服务器升级
 

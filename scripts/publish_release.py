@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -61,14 +62,24 @@ def github_api(
     if content_type:
         command.extend(["--header", f"Content-Type: {content_type}"])
     input_data = None
+    body_path: str | None = None
     if payload is not None:
         command.extend(["--input", "-"])
         input_data = json.dumps(payload).encode("utf-8")
     elif data is not None:
-        command.extend(["--input", "-"])
-        input_data = data
+        with tempfile.NamedTemporaryFile(prefix="qbot-release-", delete=False) as body:
+            body.write(data)
+            body_path = body.name
+        command.extend(["--input", body_path])
     command.append(endpoint)
-    result = subprocess.run(command, input=input_data, capture_output=True, check=False)
+    try:
+        result = subprocess.run(command, input=input_data, capture_output=True, check=False)
+    finally:
+        if body_path is not None:
+            try:
+                os.unlink(body_path)
+            except FileNotFoundError:
+                pass
     if result.returncode:
         detail = result.stderr.decode("utf-8", errors="replace").strip()
         raise ReleaseError(f"GitHub API request failed ({method} {endpoint}): {detail}")
