@@ -8,8 +8,8 @@
 - 基线 Commit：`1ac6fb8b55ac38a025a3c3fdb839b1c777446747`。
 - 正式 Release：`QBot AI v1.5.2`，Tag `v1.5.2`，Latest，5 个资产。
 - 本轮产生了代码升级：是（可靠性、安全与版本通道修复，详见 D）。
-- 是否发布新版本：否。本轮修复尚未合并 main，未创建 v1.5.3 Tag/Release。
-- 当前工作区：基于 main，存在本轮未提交修改；远程 main 未改变。
+- 是否发布新版本：否。本轮修复已合并 main，但未创建 v1.5.3 Tag/Release。
+- 合并后的 main：`c699c357a84b665490700cd63c2492327fa53ae4`；本地 main 已同步 origin/main。
 
 ## B. 真实环境验收
 
@@ -168,10 +168,10 @@
 
 ## H. GitHub 最终状态
 
-- PR 链接：尚未创建。本轮工作区存在未提交修复，按要求先完成本地验证再提交 PR。
-- 合并 Commit：无（未合并）。
-- main 状态：`1ac6fb8`，与 origin/main 一致。
-- CI 状态：最近 main CI（run 45348635135）success；本轮分支尚未推送，无新 CI。
+- PR 链接：https://github.com/yuchen0x1/AI-QQ-Bot/pull/18
+- 合并 Commit：`c699c357a84b665490700cd63c2492327fa53ae4`（squash merge）。
+- main 状态：`c699c35`，本地与 origin/main 一致，工作区干净。
+- CI 状态：PR #18 run 45361100281 全部通过（Backend tests and lint、Frontend typecheck and build、Release workflow tests、Dependency review、Docker Compose smoke test）。
 - Tag：正式 `v1.5.2`；`v1.5.1` 无 Tag；未创建 v1.5.3。
 - Release：Latest `QBot AI v1.5.2`，5 个资产；`v1.5.1` Draft 仍存在（0 资产）。
 - 分支保护：未配置（需用户授权）。
