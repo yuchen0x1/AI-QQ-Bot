@@ -303,7 +303,7 @@
       <div class="terminal-body" id="deployScript">
 <span class="p">$</span> <span class="cmd">git clone https://github.com/yuchen0x1/AI-QQ-Bot.git</span>
 <span class="p">$</span> <span class="cmd">cd AI-QQ-Bot && cp .env.example .env</span>
-<span class="p">$</span> <span class="c">python3 -c 'import secrets; print(secrets.token_urlsafe(48))'</span> <span class="c"># 填入 .env 的 SECRET_KEY</span>
+<span class="p">$</span> <span class="c">python3 -c 'import secrets; print(secrets.token_urlsafe(48))'</span> <span class="c"># 填入 SECRET_KEY，并替换数据库/Redis/管理员密码</span>
 <span class="p">$</span> <span class="cmd">docker compose up -d --build</span>
 <span class="ok">✔ frontend   Started</span>
 <span class="ok">✔ backend    Started</span>
@@ -370,8 +370,8 @@
     </div>
     <div class="feature reveal">
       <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></div>
-      <h3>在线一键升级</h3>
-      <p>后台「立即升级」：服务器自动下载、SHA-256 校验、备份、安装并重启，网页实时显示进度；失败自动回滚到原版本。</p>
+      <h3>原生 Linux 在线升级</h3>
+      <p>仅原生 Linux 部署且已安装宿主机升级服务时，后台「立即升级」可自动下载、SHA-256 校验、备份、安装并重启，网页实时显示进度；失败自动回滚。Docker Compose 与自定义部署仍按文档手动升级。</p>
     </div>
     <div class="feature reveal">
       <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg></div>
@@ -417,7 +417,7 @@
 <section class="container" id="deploy">
   <div class="sec-head reveal">
     <h2>三步<span class="grad">部署到你的服务器</span></h2>
-    <p>需要一台 Linux 服务器与 Docker Compose v2；后续升级可直接在后台一键完成。</p>
+    <p>需要一台 Linux 服务器与 Docker Compose v2；原生 Linux 部署安装独立升级服务后，后续升级可在后台一键完成，Docker Compose 部署按文档手动升级。</p>
   </div>
   <div class="steps">
     <div class="step reveal">
@@ -533,6 +533,8 @@
       const text =
 `git clone https://github.com/yuchen0x1/AI-QQ-Bot.git
 cd AI-QQ-Bot && cp .env.example .env
+python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
+# 将生成值填入 SECRET_KEY，并替换 POSTGRES_PASSWORD、REDIS_PASSWORD、ADMIN_PASSWORD
 docker compose up -d --build`;
       const done = () => { copyBtn.textContent = '已复制 ✓'; setTimeout(() => copyBtn.textContent = '复制', 1800); };
       if (navigator.clipboard && window.isSecureContext) {

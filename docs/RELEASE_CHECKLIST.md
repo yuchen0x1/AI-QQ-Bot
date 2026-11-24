@@ -12,12 +12,13 @@
 
   ```bash
   python -m unittest discover -s scripts/tests -p 'test_*.py'
+  python scripts/check_release_consistency.py --repo yuchen0x1/AI-QQ-Bot
   cd backend && python -m pytest -q && python -m ruff check app tests migrations
   cd ../frontend && npm ci && npm audit --audit-level=high && npm run build
   cd .. && docker compose --env-file .env.example config --no-env-resolution --quiet
   ```
 
-  外部 QQ、GitHub Webhook、AI、邮箱和生产 Docker 验收不可用时，必须标记为 `NOT RUN`，不能用 Mock 结果替代。
+  发布前源码版本通常领先 README 的已发布版本，检查器只会给出 warning；如果 README 声称了尚未发布的版本，检查器会报错。外部 QQ、GitHub Webhook、AI、邮箱和生产 Docker 验收不可用时，必须标记为 `NOT RUN`，不能用 Mock 结果替代。
 
 ## 打标签与 CI
 
@@ -26,6 +27,7 @@
 
    ```bash
    python scripts/prepare_release.py --tag vMAJOR.MINOR.PATCH --notes-output release-notes.md
+   python scripts/check_release_consistency.py --repo yuchen0x1/AI-QQ-Bot --tag vMAJOR.MINOR.PATCH
    git merge-base --is-ancestor HEAD origin/main
    ```
 
@@ -52,6 +54,17 @@
 - [ ] 下载到隔离目录后运行 `sha256sum -c SHA256SUMS`；不要在生产目录直接覆盖文件。
 - [ ] 检查 `git ls-remote --tags origin vMAJOR.MINOR.PATCH` 和 GitHub Release URL，确认标签与 Release 真实存在。
 - [ ] 将实际 CI run、资产校验、未执行的外部验收和剩余风险写入 `TEST_REPORT.md`，再更新 README 的最新版本块。
+- [ ] 拉取 GitHub 最新正式 Release 并执行远程一致性检查：
+
+  ```bash
+  gh api repos/yuchen0x1/AI-QQ-Bot/releases/latest > /tmp/latest-release.json
+  python scripts/check_release_consistency.py \
+    --repo yuchen0x1/AI-QQ-Bot \
+    --release-json /tmp/latest-release.json \
+    --require-remote
+  ```
+
+  `--require-remote` 会核对 Tag、`isDraft` / `isPrerelease`、发布日期、Release URL 和 5 个必需资产；GitHub API 无法访问时不要省略该参数来“通过”检查，应明确记录远程状态未验证。
 
 ## 失败恢复
 

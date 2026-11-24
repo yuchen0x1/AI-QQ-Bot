@@ -26,7 +26,7 @@
 4. **Webhook Secret 策略**：当前实现对所有环境统一要求 Secret；仓库未配置 Secret 时返回 **409**，不会接收事件；配置 Secret 后必须通过 HMAC-SHA256 验签，签名错误返回 **401**。开发/测试如需覆盖无密钥路径，应使用专门测试替身，不应放行真实 Webhook 端点。
 5. **插件权限**：插件是动态 Python 代码，虽声明 `message:reply`、`storage:config`、`ai:request`、`http:request` 并通过受限 context 调用，仍不等价于沙箱。只安装审查过的插件，不给不受信插件写权限。
 6. **密钥轮换**：修改 `SECRET_KEY` 会使 JWT 和既有 Fernet 密文不可解；轮换前需制定重新加密/重新登录流程。
-7. **横向扩展**：EventHub 和部分限流为进程内；账号租约已落库，但扩展前仍需验证连接接管、事件广播和共享限流。
+7. **横向扩展**：EventHub 默认进程内，设置 `REDIS_ENABLED=true` 后可跨实例转发；部分限流仍为进程内。账号租约已落库，但扩展前仍需验证连接接管、事件广播和共享限流。
 8. **Webhook DNS 风险**：当前校验阻断常见私网目标、IP 字面量、域名解析到私网和重定向，但 DNS 校验与连接之间仍有 rebinding 窗口；生产仍应限制 backend 的出站网络和可访问网段。
 9. **发布真实性**：Release 现在同时附带 SHA-256 校验和与 GitHub Actions Artifact Attestation；原生升级服务会在解包前校验 `provenance.sigstore.json`。当前仍没有 SBOM 或 Docker 镜像签名，容器部署不能把 SHA-256 单独当作发布者身份认证。
 10. **插件执行边界**：插件目录会动态导入 Python，权限声明不是沙箱；只加载审查过的代码，后续路线包含签名 manifest 和隔离执行。

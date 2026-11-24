@@ -10,9 +10,9 @@
 
 <!-- github-release:start -->
 
-**[v1.5.0](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.5.0)** · 2026-11-23
+**[v1.5.2](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.5.2)** · 2026-11-24
 
-本版本将 WebSocket ticket 改为持久化一次性消费，新增存活/就绪探针、可筛选并脱敏导出的审计日志，以及插件运行指标面板。随后 `main` 又补充了 GitHub 更新鉴权降级、Release 资产发布保护和原生升级包许可证校验；这些变更尚未单独创建新版本。
+本版本修复 AI 群总结跨账号消息泄漏、禁用 Provider 仍参与路由、任务 cron/interval 缺少服务端校验、Redis 队列 Worker 崩溃丢任务、告警 Webhook 的 DNS 解析与重定向绕过、普通日志凭据泄漏和前端 WebSocket 重连竞态；Release 发布器新增空更新说明校验，并补充发布检查清单。本版本无数据库结构迁移。
 
 [全部发行记录](https://github.com/yuchen0x1/AI-QQ-Bot/releases)
 
@@ -86,7 +86,7 @@
    5. 后台「QQ 账号管理 → 添加机器人」填写名称、AppID、AppSecret；本地调试可勾选「沙箱环境」；需要定时推送、群聊总结、GitHub Release 通知时保持「允许主动消息」开启（机器人需具备主动消息权限）。
    6. 点击「测试连接」验证凭据与网关，再点「启动」。把机器人拉进群后在群里 **@ 机器人** 即可触发命令 / AI / 插件；单聊直接发消息即可。
 
-   官方平台只给字符串 OpenID，本平台会自动把 `group_openid` / `user_openid` / `member_openid` 映射成稳定的内部整数 ID 持久化到 `qq_official_identities`，因此群聊、消息、AI 会话、统计等页面照常工作。**页面显示的群号 / 用户号是内部映射 ID，不是真实 QQ 号或群号。** 群与用户只在机器人被拉入群或收到消息后才登记，官方平台不提供全量群列表 / 成员列表接口。
+   官方平台只给字符串 OpenID，本平台会自动把 `group_openid` / `user_openid` / `member_openid` 映射成稳定的内部整数 ID 持久化到 `qq_official_identities`，因此群聊、消息、AI 会话、统计等页面照常工作。**未标注真实群号的群聊 / 消息页面显示内部映射 ID，不是真实 QQ 号或群号；通知群绑定后可填写真实 QQ 群号作为显示标签，但发送仍使用内部映射 ID，平台无法自行核实填写的群号。** 群与用户只在机器人被拉入群或收到消息后才登记，官方平台不提供全量群列表 / 成员列表接口。
 
 6. 监控仓库：后台添加公开仓库 URL；私有仓库配置 GitHub Token。创建推送规则，选择发送账号和群号（官方机器人请填平台已登记的映射群 ID）。Webhook 页面可查看签名密钥状态和回调地址；在 GitHub 仓库 Settings → Webhooks 中配置 `Release` 事件及相同 Secret。轮询作为备用。
 7. （可选）绑定 GitHub 账号：在 GitHub → Settings → Developer settings → OAuth Apps 新建应用，`Authorization callback URL` 填 `https://你的域名/api/github/oauth/callback`；回到「GitHub 仓库监控」，有「系统设置」权限的账号点「配置 OAuth App」填入 Client ID / Client Secret（加密入库，也可用 `GITHUB_OAUTH_CLIENT_ID/SECRET` 环境变量），保存后点「绑定 GitHub 账号」。绑定完成即可「从 GitHub 导入」批量勾选仓库，无需逐个粘贴 Token。导入的仓库不复制 Token，运行时按归属用户动态取用。
@@ -208,7 +208,7 @@ backup.sh / restore.sh
 - Webhook 回调模式已实现：`op=13` 回调地址验证（AppSecret 派生 Ed25519 签名，与官方 DEMO 逐字节对齐）+ `op=0` 事件推送验签（`X-Signature-Ed25519` / `X-Signature-Timestamp`，默认 300 秒时间窗，可用 `QQBOT_WEBHOOK_MAX_AGE_SECONDS` 调整，0 关闭时间校验）。
 - 官方机器人不提供群管理、申请审批、撤回他人消息及全量资料查询接口；相应能力页会明确标记不支持。
 - 官方群事件只在用户 @ 机器人时下发，群列表与成员列表来自平台已感知的 OpenID，不是全量同步。
-- 前端已通过 `useRealtimeSocket` 连接状态 WebSocket，并用 Pinia 单例（`stores/status.ts`，引用计数）收敛为一条连接，避免多页面重复订阅；跨实例实时事件尚未实现。
+- 前端已通过 `useRealtimeSocket` 连接状态 WebSocket，并用 Pinia 单例（`stores/status.ts`，引用计数）收敛为一条连接，避免多页面重复订阅；事件广播默认进程内，设置 `REDIS_ENABLED=true` 后通过 Redis Pub/Sub 转发到其他实例，仍需真实多实例验收。
 - Docker Compose 配置了独立 worker 扩展入口；调度默认在 backend 进程内执行（与机器人连接同进程），启用 `REDIS_QUEUE_ENABLED=true` 后只把不需要 adapter 的任务入队，由 workers profile 中的 Worker 消费；该部署模式仍需目标环境验收。
 - 数据库 schema 以 Alembic 迁移为唯一真相：启动时自动 `upgrade head`，之后执行幂等种子数据，不再使用 SQLAlchemy `create_all`。缺少 `alembic_version` 或版本不在迁移链中的旧库会拒绝启动，需备份核对后执行 `alembic stamp head` 或补充迁移。
 - 多实例机器人运行、自动化处罚策略的生产灰度、公网 HTTPS/监控告警、恢复演练、Docker/Linux 集成验收仍需在目标服务器完成。

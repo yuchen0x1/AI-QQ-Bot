@@ -6,6 +6,8 @@
 HEAD：`c50e026 fix: allow license in native upgrade bundle`
 基线应用版本：后端 `1.5.0`，前端 `1.5.0`（本工作区在独立升级分支上包含尚未发布的修复）
 
+> 历史说明：第 1–7 节记录的是 `c50e026` / `v1.5.0` 升级批次的历史基线，不是当前发布状态。当前正式版本为 `v1.5.2`（Tag `180ad55`，2026-11-24 正式 Release）；发布后核验见第 8 节。
+
 ## 1. 项目定位
 
 QBot AI 是面向 Linux 服务器的多账号 QQ 机器人管理平台。它把 QQ 官方机器人账号、群聊配置、消息/申请审核、AI 多供应商、GitHub 仓库动态通知、持久化任务、插件、邮件告警、日志、备份和在线更新放进一个 Vue 管理台。
@@ -73,7 +75,7 @@ QBot AI 是面向 Linux 服务器的多账号 QQ 机器人管理平台。它把 
 |---|---|
 | `backend` pytest（独立 venv） | PASS：256 passed、1 skipped、0 failed |
 | `backend` Ruff（独立 venv） | PASS：`ruff check app tests migrations` |
-| `backend` compileall + `prepare_release.py --tag v1.5.0` | PASS |
+| `backend` compileall + `prepare_release.py --tag v1.5.0`（历史基线） | PASS |
 | `npm run build`（frontend） | PASS：vue-tsc + Vite，2383 modules transformed |
 | `docker compose --env-file .env.example config --no-env-resolution --quiet` | PASS |
 | `git diff --check` | PASS |
@@ -92,3 +94,12 @@ QBot AI 是面向 Linux 服务器的多账号 QQ 机器人管理平台。它把 
 4. 固定 SSRF DNS 解析并限制 backend 出站网络。
 5. 完成真实 Docker/PostgreSQL/Redis、TLS、QQ、GitHub Webhook 和 AI Provider 验收。
 6. 建立浏览器 E2E、可访问性、bundle budget 和恢复测试。
+
+## 8. 发布后状态核验（v1.5.2）
+
+- 当前正式 Release：`v1.5.2`，发布于 `2026-11-24T05:50:07Z`，`isDraft=false`、`isPrerelease=false`，地址 <https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.5.2>。
+- Tag：`v1.5.2` → `180ad55cf5a1669f8ba3d1df18408db548773ef0`；发布后 `main` 为 `a40e29d179ca4c730e085de843e0fef15e2d9e32`，仅增加发布验证文档提交。
+- Release 工作流：run `45335679240`（#20）成功；5 个资产均为 `uploaded`。
+- 版本配置：后端 `APP_VERSION=1.5.2`，前端 `package.json` 与 `package-lock.json` 根版本均为 `1.5.2`。
+- 历史异常：`v1.5.1` 远程仅残留 Draft Release（ID `456350253`，0 个资产），不存在 Tag 或远程分支；失败工作流为 run `45334849794`，不构成正式版本。
+- 本节不改变第 1–7 节的历史结论；真实 QQ/GitHub/AI/SMTP 与生产多实例验收仍未执行，不能以本地 Mock 结果替代。

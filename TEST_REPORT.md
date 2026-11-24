@@ -5,8 +5,8 @@
 - 合并提交：`5d79554`（功能，PR #15）、`180ad55`（版本，PR #16）。
 - Release 工作流：[run 45335679240](https://github.com/yuchen0x1/AI-QQ-Bot/actions/runs/45335679240) 全部成功，包含 CI、打包、SHA-256 自检、provenance 验证和按 release ID 发布。
 - [v1.5.2 Release](https://github.com/yuchen0x1/AI-QQ-Bot/releases/tag/v1.5.2) 已存在，`v1.5.2` Tag 指向 `180ad55`，5 个资产已上传：`qbot-ai-1.5.2-native.tar.gz`、`qbot-ai-1.5.2.tar.gz`、`qbot-ai-1.5.2.zip`、`SHA256SUMS`、`provenance.sigstore.json`。
-- 本地结果见 [TEST_REPORT_2026-11-24.md](TEST_REPORT_2026-11-24.md)：后端 256 passed / 1 skipped、Ruff、compileall、前端生产构建、发布脚本 7 项测试和 `git diff --check` 均通过。Docker Compose CI smoke 通过；真实 QQ/GitHub/AI/SMTP、生产 PostgreSQL/Redis 多实例尚未执行。
-- 首次误建 `v1.5.1` 因版本元数据未同步被工作流正确拒绝；草稿和标签已撤回，不计入正式版本。
+- 本地结果见 [TEST_REPORT_2026-11-24.md](TEST_REPORT_2026-11-24.md)：后端 256 passed / 1 skipped、Ruff、compileall、前端生产构建、发布脚本 7 项测试和 `git diff --check` 均通过。发布后文档修复批次新增 27 项版本一致性测试，当前脚本测试共 34 项。Docker Compose CI smoke 通过；真实 QQ/GitHub/AI/SMTP、生产 PostgreSQL/Redis 多实例尚未执行。
+- 首次误建 `v1.5.1` 因版本元数据未同步被工作流正确拒绝（[run 45334849794](https://github.com/yuchen0x1/AI-QQ-Bot/actions/runs/45334849794)）；远程仍残留同名 Draft Release，但没有 `v1.5.1` Tag 或远程分支，不计入正式版本。
 
 ## v1.4.7 发布：2026-11-15（陈旧动态防迟到播报）
 
