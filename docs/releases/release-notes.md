@@ -1,5 +1,18 @@
 # 更新历史
 
+## v1.5.3（2026-11-24）
+
+### 版本概述
+
+全站 UI/UX 重构：QBOT AI Control Center 控制台完成深/浅主题体系、统一页面骨架与真实状态呈现，版本号从 v1.5.2 递增为 v1.5.3。
+
+- 设计体系：新增 `frontend/src/theme.ts` 与 `frontend/src/style.css` 主题 token，支持自动/深色/浅色并持久化。
+- 基础组件：新增 `AppIcon.vue`（统一 SVG 图标）与 `CommandPalette.vue`（Ctrl/Cmd+K 命令面板）；`App.vue` 重构分组侧栏、移动端 off-canvas、面包屑、顶部命令搜索与全局状态栏。
+- 页面改造：仪表盘、账号、群聊、申请、消息、AI、GitHub、推送规则/记录、任务、邮件、插件、日志、系统监控、设置、帮助、登录共 17 个页面接入真实 API/WebSocket 状态与空状态引导。
+- 交互优化：危险操作二次确认、表格横向滚动容器、页面过渡动画并尊重 `prefers-reduced-motion`、统一分页与筛选交互。
+- 工程验证：前端 `npm run build` 通过；后端 `pytest`、`ruff check`、`compileall` 通过；深浅主题与 320~1440 响应式浏览器验收无横向溢出、无控制台错误。
+- 说明：本版本仅涉及前端视觉与交互层，后端 API、权限与业务逻辑保持不变，无数据库迁移。
+
 ## v1.5.2（2026-11-24）
 
 ### 版本概述

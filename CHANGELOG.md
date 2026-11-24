@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 2026-11-24 · v1.5.3
+
+- 全站 UI/UX 重构：新增 `theme.ts` 主题 token 与 `style.css` 设计体系，支持自动/深色/浅色并持久化。
+- 新增统一图标组件 `AppIcon.vue` 与 `Ctrl/Cmd+K` 命令面板 `CommandPalette.vue`；`App.vue` 重构分组侧栏、移动端 off-canvas、面包屑与全局状态栏。
+- 仪表盘、账号、群聊、申请、消息、AI、GitHub、推送规则/记录、任务、邮件、插件、日志、系统监控、设置、帮助、登录共 17 个页面接入真实 API/WebSocket 状态与空状态引导。
+- 危险操作二次确认、表格横向滚动容器、页面过渡动画（尊重 `prefers-reduced-motion`）、统一分页与筛选交互。
+- 工程验证：前端生产构建、后端 pytest/ruff、深浅主题与 320~1440 响应式浏览器验收全部通过；无数据库迁移。
+
 ## 2026-11-24 · v1.5.2
 
 - 修复：AI 群总结按账号隔离消息，禁用 Provider 后其模型不再参与选择/降级，无效 cron 和 interval 在创建/更新任务时被拒绝。
