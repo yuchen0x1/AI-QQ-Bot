@@ -6,6 +6,19 @@
     <meta name="theme-color" content="#0c101b" />
     <meta name="description" content="QBot AI 多账号智能 QQ 机器人管理平台" />
     <title>QBot AI 控制台</title>
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('qbot_theme');
+          var light = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+          var theme = saved === 'light' || (saved === 'system' && light) ? 'light' : 'dark';
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+        } catch (error) {
+          document.documentElement.dataset.theme = 'dark';
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>
