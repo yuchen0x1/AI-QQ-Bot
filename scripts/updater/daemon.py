@@ -201,7 +201,7 @@ def unpack(archive: Path, destination: Path, version: str) -> None:
             if key in seen:
                 raise ValueError("升级包含有重复路径")
             seen.add(key)
-            if len(parts) > 1 and parts[1] not in {"backend", "frontend", "qbot-update.json"}:
+            if len(parts) > 1 and parts[1] not in {"LICENSE", "backend", "frontend", "qbot-update.json"}:
                 raise ValueError("升级包包含不允许的目录")
             if any(p in {".env", "data", "backups", ".venv", "node_modules", "__pycache__"} for p in parts):
                 raise ValueError("升级包混入运行数据")
