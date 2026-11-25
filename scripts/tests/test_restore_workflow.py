@@ -36,6 +36,9 @@ class RestoreWorkflowTests(unittest.TestCase):
 printf '%s\\t' "$@" >> "$QBOT_TEST_LOG"
 printf '\\n' >> "$QBOT_TEST_LOG"
 joined="$*"
+if [[ "${QBOT_TEST_DOCKER_READ_STDIN:-0}" == '1' && "$joined" == *"createdb"* && "$joined" != *"--interactive=false"* && "$joined" != *"--interactive false"* ]]; then
+  cat > /dev/null
+fi
 if [[ "$joined" == *"ps --services --status running"* ]]; then printf 'backend\\nworker\\n'; exit 0; fi
 if [[ "$joined" == *"pg_dump"* ]]; then printf '%s\\n' '-- PostgreSQL database dump' 'SELECT 1;'; exit "${QBOT_TEST_DUMP_STATUS:-0}"; fi
 if [[ "$joined" == *"SELECT CASE WHEN"* ]]; then printf '%s\\n' "${QBOT_TEST_SCHEMA:-1}"; exit 0; fi
@@ -104,6 +107,14 @@ exit 0
         snapshots = list((self.root / "backups").glob("qbot-*.sql.gz"))
         self.assertEqual(len(snapshots), 1)
         self.assertTrue(snapshots[0].with_name(snapshots[0].name + ".sha256").is_file())
+
+    def test_non_streaming_docker_exec_preserves_piped_restore_confirmation(self):
+        result, commands = self.run_script(QBOT_TEST_DOCKER_READ_STDIN="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any("\tstop\tbackend\tworker" in command for command in commands))
+        self.assertTrue(any('"$POSTGRES_DB"' in command and "psql" in command for command in commands))
+        self.assertTrue(any("\tstart\tbackend" in command for command in commands))
+        self.assertTrue(any("\tstart\tworker" in command for command in commands))
 
     def test_failed_pre_restore_snapshot_prevents_production_write_and_retention(self):
         backups = self.root / "backups"

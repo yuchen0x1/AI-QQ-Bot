@@ -22,7 +22,7 @@ cleanup() {
   exit "$result"
 }
 trap cleanup EXIT
-"${compose[@]}" exec -T postgres sh -ec 'createdb -U "$POSTGRES_USER" "$1"' sh "$rehearsal"
+"${compose[@]}" exec -T --interactive=false postgres sh -ec 'createdb -U "$POSTGRES_USER" "$1"' sh "$rehearsal"
 gzip -dc -- "$archive" | "${compose[@]}" exec -T postgres sh -ec \
   'exec psql --single-transaction -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1"' sh "$rehearsal"
 schema_ok="$("${compose[@]}" exec -T postgres sh -ec \
