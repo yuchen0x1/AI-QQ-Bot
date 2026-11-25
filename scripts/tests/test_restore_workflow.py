@@ -39,6 +39,12 @@ joined="$*"
 if [[ "${QBOT_TEST_DOCKER_READ_STDIN:-0}" == '1' && "$joined" == *"createdb"* && "$joined" != *"--interactive=false"* && "$joined" != *"--interactive false"* ]]; then
   cat > /dev/null
 fi
+if [[ "${QBOT_TEST_DOCKER_READ_STDIN:-0}" == '1' && "$joined" == *"SELECT CASE WHEN"* && "$joined" != *"--interactive=false"* && "$joined" != *"--interactive false"* ]]; then
+  cat > /dev/null
+fi
+if [[ "${QBOT_TEST_DOCKER_READ_STDIN:-0}" == '1' && "$joined" == *"SELECT version_num"* && "$joined" != *"--interactive=false"* && "$joined" != *"--interactive false"* ]]; then
+  cat > /dev/null
+fi
 if [[ "$joined" == *"ps --services --status running"* ]]; then printf 'backend\\nworker\\n'; exit 0; fi
 if [[ "$joined" == *"pg_dump"* ]]; then printf '%s\\n' '-- PostgreSQL database dump' 'SELECT 1;'; exit "${QBOT_TEST_DUMP_STATUS:-0}"; fi
 if [[ "$joined" == *"SELECT CASE WHEN"* ]]; then printf '%s\\n' "${QBOT_TEST_SCHEMA:-1}"; exit 0; fi

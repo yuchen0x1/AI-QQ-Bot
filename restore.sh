@@ -15,7 +15,7 @@ rehearsal="qbot_restore_$(date +%s)_$$_$RANDOM"
 maintenance=false
 cleanup() {
   result=$?
-  "${compose[@]}" exec -T postgres sh -ec 'dropdb --if-exists -U "$POSTGRES_USER" "$1"' sh "$rehearsal" || true
+  "${compose[@]}" exec -T --interactive=false postgres sh -ec 'dropdb --if-exists -U "$POSTGRES_USER" "$1"' sh "$rehearsal" || true
   if [[ "$result" != 0 && "$maintenance" == true ]]; then
     echo '恢复失败：backend/worker 保持停止。请检查恢复前快照和日志，再手动启动服务。' >&2
   fi
@@ -25,10 +25,10 @@ trap cleanup EXIT
 "${compose[@]}" exec -T --interactive=false postgres sh -ec 'createdb -U "$POSTGRES_USER" "$1"' sh "$rehearsal"
 gzip -dc -- "$archive" | "${compose[@]}" exec -T postgres sh -ec \
   'exec psql --single-transaction -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1"' sh "$rehearsal"
-schema_ok="$("${compose[@]}" exec -T postgres sh -ec \
+schema_ok="$("${compose[@]}" exec -T --interactive=false postgres sh -ec \
   'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1" -At -c "SELECT CASE WHEN to_regclass('\''public.accounts'\'') IS NOT NULL AND to_regclass('\''public.users'\'') IS NOT NULL AND to_regclass('\''public.system_settings'\'') IS NOT NULL AND to_regclass('\''public.alembic_version'\'') IS NOT NULL THEN 1 ELSE 0 END"' sh "$rehearsal")"
 [[ "$schema_ok" == '1' ]] || { echo '隔离恢复缺少必要业务表，拒绝覆盖运行数据库。' >&2; exit 1; }
-revision="$("${compose[@]}" exec -T postgres sh -ec \
+revision="$("${compose[@]}" exec -T --interactive=false postgres sh -ec \
   'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$1" -At -c "SELECT version_num FROM public.alembic_version"' sh "$rehearsal")"
 python3 scripts/backup_storage.py revision "$revision"
 if [[ "$verify_only" == true ]]; then echo '隔离数据库恢复演练通过；未修改运行数据库。'; exit 0; fi
