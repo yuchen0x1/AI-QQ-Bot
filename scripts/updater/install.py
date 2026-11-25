@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from uuid import UUID
 
+from plugin_storage import persist_custom_plugins
+
 
 def main():
     if os.geteuid() != 0:
@@ -72,6 +74,20 @@ def main():
         "UPDATE_SOCKET=/run/qbot-updater/control.sock",
         "UPDATE_MAINTENANCE_FILE=/var/lib/qbot-updater-status/maintenance",
     ]
+    extension_values = [line.split("=", 1)[1].strip().strip("\"'") for line in lines if line.startswith("PLUGIN_EXTENSIONS_DIR=")]
+    extension_root = Path(extension_values[-1] if extension_values and extension_values[-1] else "/var/lib/qbot/plugins")
+    if not extension_root.is_absolute():
+        raise SystemExit("PLUGIN_EXTENSIONS_DIR must be an absolute persistent path")
+    if extension_root.resolve().is_relative_to(root / "releases"):
+        raise SystemExit("PLUGIN_EXTENSIONS_DIR must not point into a release directory")
+    import pwd
+
+    app_identity = pwd.getpwnam("qbot")
+    preserved = persist_custom_plugins(
+        current / "backend/plugins", extension_root, owner=(app_identity.pw_uid, app_identity.pw_gid),
+    )
+    lines = [line for line in lines if not line.startswith("PLUGIN_EXTENSIONS_DIR=")]
+    lines.append("PLUGIN_EXTENSIONS_DIR=" + str(extension_root))
     env.write_text("\n".join(lines) + "\n")
     os.chmod(env, 0o640)
     legacy_venv = current / ".venv"
@@ -129,6 +145,7 @@ def main():
     subprocess.run(["/usr/bin/systemctl", "reload", "nginx"], check=True)
     subprocess.run(["/usr/bin/systemctl", "enable", "qbot-updater"], check=True)
     subprocess.run(["/usr/bin/systemctl", "restart", "qbot-updater"], check=True)
+    print(f"Custom plugins: {len(preserved['copied'])} copied to persistent storage; {len(preserved['preserved'])} existing copies kept.")
     print("Updater installed. Restart qbot after deploying the upgrade entry API and UI.")
 
 

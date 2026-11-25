@@ -275,7 +275,11 @@ async def cmd_group_info(ctx: CommandContext) -> str:
 
 @command("repos", ["仓库列表"])
 async def cmd_repos(ctx: CommandContext) -> str:
-    rows = await ctx.db.scalars(select(GithubRepository).order_by(GithubRepository.id))
+    from app.services.github.access import command_repository_scope
+
+    rows = await ctx.db.scalars(select(GithubRepository).where(command_repository_scope(
+        ctx.account_id, ctx.group_number, is_private=ctx.is_private,
+    )).order_by(GithubRepository.id))
     items = list(rows)
     if not items:
         return "当前没有监控中的 GitHub 仓库"
@@ -290,12 +294,24 @@ async def cmd_repos(ctx: CommandContext) -> str:
 async def cmd_check_update(ctx: CommandContext) -> str:
     if ctx.rank < ROLE_RANK["admin"]:
         raise PermissionError("只有群管理员或以上权限才能触发版本检查")
-    from app.services.github.monitor import check_all_repositories
+    from app.services.github.access import command_repository_scope, notification_scope
+    from app.services.github.monitor import check_repository
 
     keyword = " ".join(ctx.args).strip().lower()
-    results = await check_all_repositories(ctx.db, only_enabled=True)
+    query = select(GithubRepository).where(
+        command_repository_scope(ctx.account_id, ctx.group_number, is_private=ctx.is_private),
+        GithubRepository.monitor_enabled.is_(True),
+    )
     if keyword:
-        results = [r for r in results if keyword in str(r.get("repository", "")).lower()]
+        query = query.where(GithubRepository.full_name.ilike(f"%{keyword}%"))
+    repos = list(await ctx.db.scalars(query.order_by(GithubRepository.id)))
+    results = []
+    scope_token = notification_scope.set((ctx.account_id, ctx.group_number or 0))
+    try:
+        for repo in repos:
+            results.append(await check_repository(ctx.db, repo))
+    finally:
+        notification_scope.reset(scope_token)
     if not results:
         return "没有可检查的仓库（请先在后台添加仓库）"
     total_new = sum(int(r.get("new_releases") or 0) for r in results)

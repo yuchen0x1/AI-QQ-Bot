@@ -48,6 +48,7 @@ class TaskRecord(Base):
     __tablename__ = "task_records"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    queue_job_id: Mapped[str | None] = mapped_column(String(64), index=True)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("scheduled_tasks.id", ondelete="CASCADE"), index=True)
     task_name: Mapped[str | None] = mapped_column(String(190))
     trigger: Mapped[str] = mapped_column(String(16), default="schedule", nullable=False)  # schedule/manual
@@ -141,3 +142,28 @@ class LoginAttempt(Base):
     ip: Mapped[str | None] = mapped_column(String(64))
     success: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True, nullable=False)
+
+
+class RuntimeLease(Base):
+    """Database-backed singleton ownership, including the scheduler leader."""
+
+    __tablename__ = "runtime_leases"
+
+    name: Mapped[str] = mapped_column(String(96), primary_key=True)
+    owner: Mapped[str] = mapped_column(String(190), nullable=False)
+    token: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class QueueExecution(Base):
+    """Durable success receipt survives Redis ACK connection loss and restarts."""
+
+    __tablename__ = "queue_executions"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("scheduled_tasks.id", ondelete="SET NULL"))
+    claim_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="processing")
+    lease_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    record_id: Mapped[int | None] = mapped_column(ForeignKey("task_records.id", ondelete="SET NULL"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

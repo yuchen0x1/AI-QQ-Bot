@@ -1,6 +1,6 @@
 """插件系统：目录发现、动态加载、权限声明、按账号/群启用、命令与消息钩子。
 
-安全边界：插件只能通过 ctx 提供的受限接口工作，不能直接访问数据库、协议适配器或系统命令。
+插件为服务器进程内受信 Python 代码，权限声明和 context 不是安全沙箱。
 """
 
 from __future__ import annotations
@@ -8,6 +8,9 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import os
+import re
+import shutil
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -32,6 +35,7 @@ ALLOWED_PERMISSIONS = {
 
 # 权限调用审计环形缓冲长度；仅保留最近记录，避免高频插件撑爆内存。
 _PERMISSION_AUDIT_MAXLEN = 300
+BUILTIN_IDS = frozenset({"dice", "keyword_reply"})
 
 
 @dataclass
@@ -89,7 +93,19 @@ class PluginMessage:
     sender_name: str = ""
 
 
-PluginHandler = Callable[[PluginMessage], Awaitable[str | None]]
+@dataclass
+class PluginReply:
+    text: str | None = None
+    continue_processing: bool = False
+
+
+@dataclass
+class PluginDispatchResult:
+    replies: list[str] = field(default_factory=list)
+    handled: bool = False
+
+
+PluginHandler = Callable[[PluginMessage], Awaitable[str | PluginReply | None]]
 
 
 @dataclass
@@ -151,26 +167,105 @@ class PluginManager:
         )
 
     # ------------------------------------------------------------------
-    def discover(self) -> list[dict[str, Any]]:
-        root = Path(settings.plugin_dir)
-        found: list[dict[str, Any]] = []
-        if not root.exists():
-            return found
-        for entry in sorted(root.iterdir()):
-            manifest_path = entry / "plugin.json"
-            # Never follow a plugin directory or manifest symlink.  A plugin
-            # is executable code in the server process, so a symlink could
-            # otherwise make an unrelated file tree loadable by ``sync``.
-            if entry.is_symlink() or not entry.is_dir() or manifest_path.is_symlink() or not manifest_path.exists():
+    @staticmethod
+    def extension_root() -> Path:
+        return Path(getattr(settings, "plugin_extensions_dir", "") or (Path(settings.data_dir) / "plugins"))
+
+    @staticmethod
+    def _manifest(root: Path) -> dict[str, Any]:
+        manifest_path = root / "plugin.json"
+        code = root / "main.py"
+        if root.is_symlink() or manifest_path.is_symlink() or code.is_symlink():
+            raise ValueError("plugin directories and entry files must not be symlinks")
+        if not manifest_path.is_file() or not code.is_file():
+            raise ValueError("plugin.json and main.py are required")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError("plugin manifest must be an object")
+        plugin_id = manifest.get("id", root.name)
+        if not isinstance(plugin_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}", plugin_id):
+            raise ValueError("invalid plugin id")
+        permissions = manifest.get("permissions", ["message:reply"])
+        if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
+            raise ValueError("plugin permissions must be strings")
+        unknown = set(permissions) - ALLOWED_PERMISSIONS
+        if unknown:
+            raise ValueError("unsupported plugin permissions: " + ", ".join(sorted(unknown)))
+        if not isinstance(manifest.get("config", {}), dict):
+            raise ValueError("plugin config must be an object")
+        commands = manifest.get("commands", [])
+        if not isinstance(commands, list) or any(not isinstance(item, dict) or not isinstance(item.get("name"), str) for item in commands):
+            raise ValueError("plugin commands must have names")
+        manifest["id"] = plugin_id
+        manifest["permissions"] = permissions
+        return manifest
+
+    def _persist_legacy(self, root: Path, manifest: dict[str, Any]) -> Path:
+        if manifest.get("builtin") or root.is_relative_to(self.extension_root().resolve()):
+            return root
+        destination = self.extension_root().resolve() / manifest["id"]
+        if destination == root:
+            return root
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            if any(path.is_symlink() for path in root.rglob("*")):
+                raise ValueError("custom plugin tree must not contain symlinks")
+            shutil.copytree(root, destination)
+        self._manifest(destination)
+        return destination
+
+    def _legacy_release_source(self, plugin: Plugin, original: Path) -> Path:
+        """Recover a registered custom plugin whose old path used current/.
+
+        Native releases retain their previous root-owned source directories.
+        Only this documented layout and the registered id/version are eligible;
+        we never discover and enable unrelated historical code.
+        """
+        if original.is_dir() or len(original.parents) < 4:
+            return original
+        current = original.parents[2]
+        releases = current.parent / "releases"
+        if current.name != "current" or not current.is_symlink() or not releases.is_dir():
+            return original
+        if not current.resolve().is_relative_to(releases.resolve()):
+            return original
+        for release in sorted(releases.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
+            if release.is_symlink() or not release.is_dir():
                 continue
+            candidate = release / "backend" / "plugins" / plugin.plugin_id
             try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError) as exc:
-                logger.warning("插件清单解析失败 %s: %s", entry.name, exc)
+                manifest = self._manifest(candidate)
+                if os.name != "nt":
+                    nodes = [releases, release, candidate, *candidate.rglob("*")]
+                    if any(node.is_symlink() or node.stat().st_uid != 0 or node.stat().st_mode & 0o022 for node in nodes):
+                        continue
+            except (ValueError, OSError):
                 continue
-            manifest.setdefault("id", entry.name)
-            manifest["_path"] = str(entry)
-            found.append(manifest)
+            if manifest["id"] == plugin.plugin_id and str(manifest.get("version") or "1.0.0") == plugin.version:
+                return candidate
+        return original
+
+    def discover(self) -> list[dict[str, Any]]:
+        found: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        builtin_root = Path(settings.plugin_dir).resolve()
+        for root in dict.fromkeys((builtin_root, self.extension_root().resolve())):
+            if not root.is_dir():
+                continue
+            for entry in sorted(root.iterdir()):
+                if not entry.is_dir():
+                    continue
+                try:
+                    manifest = self._manifest(entry)
+                    manifest["builtin"] = bool(root == builtin_root and manifest["id"] in BUILTIN_IDS and manifest.get("builtin"))
+                    entry = self._persist_legacy(entry, manifest)
+                    if manifest["id"] in seen:
+                        continue
+                    seen.add(manifest["id"])
+                    manifest["_path"] = str(entry)
+                    found.append(manifest)
+                except (ValueError, OSError) as exc:
+                    logger.warning("插件清单无效 %s: %s", entry.name, exc)
         return found
 
     async def sync_to_db(self, db: AsyncSession) -> int:
@@ -206,13 +301,25 @@ class PluginManager:
 
     # ------------------------------------------------------------------
     def load_one(self, plugin: Plugin) -> LoadedPlugin | None:
-        path = Path(plugin.path or "") / "main.py"
-        if path.is_symlink() or not path.is_file():
-            plugin.load_status = "missing"
-            plugin.load_error = "未找到 main.py"
-            return None
         module_name = f"qbot_plugin_{plugin.plugin_id}"
         try:
+            plugin.builtin = bool(plugin.builtin and plugin.plugin_id in BUILTIN_IDS)
+            persistent = self.extension_root() / plugin.plugin_id
+            original = persistent if not plugin.builtin and persistent.is_dir() else Path(plugin.path or "")
+            if not plugin.builtin:
+                original = self._legacy_release_source(plugin, original)
+            root = original.resolve()
+            # Validate before import: module top-level code is already execution.
+            if original.is_symlink():
+                raise ValueError("plugin directory must not be a symlink")
+            manifest = self._manifest(root)
+            if manifest["id"] != plugin.plugin_id:
+                raise ValueError("plugin manifest id differs from registered id")
+            if set(plugin.permissions or []) - ALLOWED_PERMISSIONS:
+                raise ValueError("插件声明了不受支持的权限")
+            root = self._persist_legacy(root, {**manifest, "builtin": plugin.builtin})
+            plugin.path = str(root)
+            path = root / "main.py"
             spec = importlib.util.spec_from_file_location(module_name, path)
             if not spec or not spec.loader:
                 raise ImportError("无法创建模块规格")
@@ -286,6 +393,11 @@ class PluginManager:
         return True
 
     async def dispatch_message(
+        self, db: AsyncSession, **kwargs,
+    ) -> list[str]:
+        return (await self.dispatch(db, **kwargs)).replies
+
+    async def dispatch(
         self,
         db: AsyncSession,
         *,
@@ -294,9 +406,9 @@ class PluginManager:
         user_id: int,
         text: str,
         sender_name: str = "",
-    ) -> list[str]:
+    ) -> PluginDispatchResult:
         if not text or not self.loaded:
-            return []
+            return PluginDispatchResult()
         rows = {p.plugin_id: p for p in await db.scalars(select(Plugin).where(Plugin.enabled.is_(True)))}
         replies: list[str] = []
         body = text.strip()
@@ -325,26 +437,37 @@ class PluginManager:
                 started = time.perf_counter()
                 try:
                     reply = await handler(message)
-                    if reply:
+                    if isinstance(reply, PluginReply):
+                        if reply.text:
+                            replies.append(reply.text)
+                    elif reply:
                         replies.append(reply)
                     metrics.record((time.perf_counter() - started) * 1000, None)
                 except Exception as exc:  # noqa: BLE001
                     metrics.record((time.perf_counter() - started) * 1000, f"{type(exc).__name__}: {exc}")
                     logger.exception("插件命令执行失败 %s", plugin_id)
                     replies.append(f"插件 {plugin_id} 执行出错：{type(exc).__name__}")
-                continue
+                return PluginDispatchResult(replies, handled=True)
             for hook in loaded.ctx.message_hooks:
                 metrics = self.metrics_for(plugin_id)
                 started = time.perf_counter()
                 try:
                     reply = await hook(message)
-                    if reply:
+                    if isinstance(reply, PluginReply):
+                        if reply.text:
+                            replies.append(reply.text)
+                        if not reply.continue_processing:
+                            metrics.record((time.perf_counter() - started) * 1000, None)
+                            return PluginDispatchResult(replies, handled=True)
+                    elif reply:
                         replies.append(reply)
+                        metrics.record((time.perf_counter() - started) * 1000, None)
+                        return PluginDispatchResult(replies, handled=True)
                     metrics.record((time.perf_counter() - started) * 1000, None)
                 except Exception as exc:  # noqa: BLE001
                     metrics.record((time.perf_counter() - started) * 1000, f"{type(exc).__name__}: {exc}")
                     logger.exception("插件消息钩子执行失败 %s", plugin_id)
-        return replies
+        return PluginDispatchResult(replies, handled=False)
 
 
 plugin_manager = PluginManager()

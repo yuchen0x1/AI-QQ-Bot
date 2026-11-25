@@ -8,7 +8,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import client_ip, get_current_user, require
@@ -28,7 +28,10 @@ from app.core.security import (
 )
 from app.core.totp import generate_secret, matching_counter, provisioning_uri
 from app.db.session import get_db
-from app.models import AuditLog, AuthSession, GithubRepository, LoginAttempt, Role, User
+from app.models import (
+    AuditLog, AuthSession, GithubNotificationTarget, GithubRepository, LoginAttempt,
+    PushRecord, PushRule, Role, ScheduledTask, SystemSetting, User, UserGithubToken,
+)
 from app.schemas.auth import (
     AuditLogOut,
     LoginRequest,
@@ -495,12 +498,41 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="用户不存在")
     if user.id == current.id:
         raise HTTPException(status_code=400, detail="不能删除当前登录账号")
-    # 仓库归属为软引用：删除用户时把其名下仓库转为全局仓库，避免留下悬空 ID。
-    await db.execute(
-        update(GithubRepository).where(GithubRepository.owner_user_id == user.id).values(owner_user_id=None)
-    )
+    from app.services.scheduler import scheduler_service
+
+    # NULL is reserved for historical global data; deleted owners retain a private tombstone.
+    repo_ids = list(await db.scalars(select(GithubRepository.id).where(GithubRepository.owner_user_id == user.id)))
+    await db.execute(update(GithubRepository).where(GithubRepository.owner_user_id == user.id).values(
+        archived_at=_now(), monitor_enabled=False, remote_available=False,
+        token_enc=None, webhook_secret_enc=None, last_check_status="owner_deleted",
+    ))
+    rule_ids = list(await db.scalars(select(PushRule.id).where(or_(
+        PushRule.repository_id.in_(repo_ids), PushRule.managed_by_user_id == user.id,
+    ))))
+    await db.execute(update(PushRule).where(PushRule.id.in_(rule_ids)).values(enabled=False))
+    await db.execute(update(PushRecord).where(
+        PushRecord.rule_id.in_(rule_ids), PushRecord.status.in_(["pending", "failed", "retrying"]),
+    ).values(status="cancelled", error="仓库所有者已删除，通知已归档"))
+    task_ids = []
+    repo_id_strings = {str(repo_id) for repo_id in repo_ids}
+    for task in list(await db.scalars(select(ScheduledTask))):
+        if task.created_by == user.username or str((task.payload or {}).get("repository_id")) in repo_id_strings:
+            task.enabled = False
+            task.last_error = "任务授权用户或仓库所有者已删除"
+            task_ids.append(task.id)
+    await db.execute(delete(UserGithubToken).where(UserGithubToken.user_id == user.id))
+    await db.execute(delete(GithubNotificationTarget).where(GithubNotificationTarget.user_id == user.id))
+    for setting in list(await db.scalars(select(SystemSetting).where(SystemSetting.key.like("github_%")))):
+        if setting.key == f"github_notifications:{user.id}" or (
+            isinstance(setting.value, dict) and setting.value.get("user_id") == user.id
+        ):
+            await db.delete(setting)
     await db.delete(user)
     await db.commit()
+    for repo_id in repo_ids:
+        scheduler_service.unschedule_repo(repo_id)
+    for task_id in task_ids:
+        scheduler_service.unschedule_task(task_id)
     await audit(db, user_id=current.id, username=current.username, action="delete_user", target=str(user_id), ip=client_ip(request))
     return MessageOut(detail="用户已删除")
 

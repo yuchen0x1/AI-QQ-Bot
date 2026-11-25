@@ -17,6 +17,10 @@
 - 管理台浏览器认证使用 HttpOnly `qbot_token` Cookie；Bearer 令牌仍保留给脚本/API 客户端，前端不再把访问令牌写入 localStorage。
 - GitHub/QQ Webhook 在应用层限制请求体为 2 MiB，避免直接暴露 backend 时仅依赖 Nginx 的 body 限制。
 - SQLite 备份使用 online backup 和临时文件原子替换，备份 API 只返回文件名。
+- AI 请求在真正发送时校验全部 A/AAAA，连接固定到已验证 IP 并保留 Host、TLS SNI 和证书校验，拒绝凭据请求重定向。Ollama 内网访问仅接受管理员配置的精确 `OLLAMA_ALLOWED_BASE_URLS`，不豁免元数据地址。
+- AI 备用模型必须启用且明确标记备用；跨供应商降级默认关闭，账号和群的模型授权范围同时约束主模型与备用模型。
+- GitHub OAuth 使用持久化一次性 state、浏览器 nonce、发起 AuthSession 与 S256 PKCE；WebSocket 在持续推送期间也独立周期复查登录会话。
+- Webhook 使用独立宽容限流，签名失败日志按目标聚合采样，减少无效请求造成的数据库写放大。
 
 ## 当前风险与真实限制
 
@@ -27,9 +31,11 @@
 5. **插件权限**：插件是动态 Python 代码，虽声明 `message:reply`、`storage:config`、`ai:request`、`http:request` 并通过受限 context 调用，仍不等价于沙箱。只安装审查过的插件，不给不受信插件写权限。
 6. **密钥轮换**：修改 `SECRET_KEY` 会使 JWT 和既有 Fernet 密文不可解；轮换前需制定重新加密/重新登录流程。
 7. **横向扩展**：EventHub 默认进程内，设置 `REDIS_ENABLED=true` 后可跨实例转发；部分限流仍为进程内。账号租约已落库，但扩展前仍需验证连接接管、事件广播和共享限流。
-8. **Webhook DNS 风险**：当前校验阻断常见私网目标、IP 字面量、域名解析到私网和重定向，但 DNS 校验与连接之间仍有 rebinding 窗口；生产仍应限制 backend 的出站网络和可访问网段。
+8. **出站网络边界**：AI 请求已固定连接校验后的 IP；告警 Webhook 的 DNS 校验与连接之间仍有窗口。生产仍应限制 backend 的出站网络和可访问网段，不能用 AI 的修复推断全部网络客户端已经消除 rebinding 风险。
 9. **发布真实性**：Release 现在同时附带 SHA-256 校验和与 GitHub Actions Artifact Attestation；原生升级服务会在解包前校验 `provenance.sigstore.json`。当前仍没有 SBOM 或 Docker 镜像签名，容器部署不能把 SHA-256 单独当作发布者身份认证。
 10. **插件执行边界**：插件目录会动态导入 Python，权限声明不是沙箱；只加载审查过的代码，后续路线包含签名 manifest 和隔离执行。
+11. **历史仓库归属**：迁移保留已有 `owner_user_id=NULL` 全局仓库；旧版本已因删除用户而丢失的归属无法可靠推断，管理员应人工复核历史全局仓库。新版本删除所有者会归档并保留原归属，不继续扩大可见范围。
+12. **外部副作用**：持久 inbox、任务 job ID 和成功回执减少重投，但平台请求中断后的发送结果可能不确定。`uncertain` 事件需要核对平台投递，不能把本地去重称为 QQ 平台 exactly-once。Webhook 限流与日志采样仍是进程级，多实例应另设共享入口预算。
 
 ## 生产基线
 

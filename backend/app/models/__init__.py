@@ -37,7 +37,7 @@ from app.models.task import (
     SystemSetting,
     TaskRecord,
 )
-from app.models.user import AuditLog, AuthSession, Role, User, WsTicket
+from app.models.user import AuditLog, AuthSession, GithubOAuthState, Role, User, WsTicket
 from app.models.email_alert import EmailAlert
 
 __all__ = [
@@ -49,6 +49,7 @@ __all__ = [
     "AuditLog",
     "AuthSession",
     "WsTicket",
+    "GithubOAuthState",
     "Account",
     "AccountConnection",
     "Group",

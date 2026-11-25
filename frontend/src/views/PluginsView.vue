@@ -249,7 +249,7 @@ const config = {
     { key: 'config', label: '插件配置 JSON', type: 'json', rows: 6 },
   ],
   actions: [
-    { label: '指标', handler: (row: any) => showMetrics(row), type: 'primary' },
+    { label: '指标', permission: 'plugin:view', handler: (row: any) => showMetrics(row), type: 'primary' },
     { label: '重新加载', suffix: 'reload', method: 'POST', type: 'warning' },
   ],
   secondaryAction: {

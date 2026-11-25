@@ -11,6 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decrypt_secret
+from app.core.webhook_limits import allow_webhook, signature_failure_sample
+from app.api.deps import client_ip
 from app.db.session import get_db
 from app.models import GithubRepository
 from app.services.github.monitor import handle_webhook_payload
@@ -57,9 +59,14 @@ def verify_signature(secret: str, body: bytes, signature: str | None) -> bool:
 
 @router.post("/github/{repo_id}")
 async def github_webhook(repo_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    allowed, retry_after = allow_webhook(client_ip(request), "github")
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Webhook 请求过于频繁", headers={"Retry-After": str(retry_after)})
     repo = await db.get(GithubRepository, repo_id)
     if not repo:
         raise HTTPException(status_code=404, detail="仓库不存在")
+    if repo.archived_at is not None:
+        raise HTTPException(status_code=410, detail="仓库已归档")
     try:
         body = await _read_body_limited(request)
     except ValueError as exc:
@@ -69,13 +76,11 @@ async def github_webhook(repo_id: int, request: Request, db: AsyncSession = Depe
     if not secret:
         raise HTTPException(status_code=409, detail="必须为 Webhook 配置 Secret")
     if not verify_signature(secret, body, signature):
-        await write_log(
-            db,
-            level="WARNING",
-            category="github",
-            message=f"Webhook 验签失败：{repo.full_name}（来源 {request.client.host if request.client else 'unknown'}）",
-            context={"repo": repo.full_name},
-        )
+        sample = signature_failure_sample(f"github:{repo.id}")
+        if sample is not None:
+            await write_log(db, level="WARNING", category="github",
+                            message=f"Webhook 验签失败：{repo.full_name}（聚合 {sample} 次，来源 {client_ip(request)}）",
+                            context={"repo": repo.full_name, "signature_failures": sample, "sample_seconds": 60})
         raise HTTPException(status_code=401, detail="Webhook 签名校验失败")
     event_type = request.headers.get("x-github-event", "unknown")
     delivery = request.headers.get("x-github-delivery")
@@ -83,6 +88,8 @@ async def github_webhook(repo_id: int, request: Request, db: AsyncSession = Depe
         payload = json.loads(body or b"{}")
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="请求体不是合法 JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
 
     if event_type == "ping":
         return {"ok": True, "message": "webhook ping 成功", "zen": payload.get("zen")}

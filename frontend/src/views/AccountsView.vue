@@ -84,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useStatusStore } from '../stores/status'
 import ResourceView from '../components/ResourceView.vue'
@@ -117,6 +117,16 @@ const liveStateLabel = computed(() => ({
 
 onMounted(() => {
   status.acquire()
+})
+watch(liveMessage, payload => {
+  if (!payload.accounts) return
+  const states = new Map(payload.accounts.map(account => [account.id, account.state]))
+  resourceRef.value?.patchRows?.((row: any) => states.has(row.id)
+    ? { ...row, runtime_state: states.get(row.id), connection: { ...row.connection, status: states.get(row.id) === 'online' ? 'online' : states.get(row.id) === 'error' ? 'error' : 'offline' } }
+    : { ...row, runtime_state: 'stopped', connection: { ...row.connection, status: 'offline' } })
+})
+watch(socketState, (value, previous) => {
+  if (value === 'open' && previous !== 'open') void resourceRef.value?.load?.()
 })
 
 function number(value: number | string | null | undefined) {
@@ -192,8 +202,8 @@ const config = {
     ...commonFields(),
   ],
   actions: [
-    { labelFor: (row: any) => row.runtime_state === 'online' ? '停止' : '启动', suffix: 'start', method: 'POST', type: 'success', path: (row: any) => `/accounts/${row.id}/${row.runtime_state === 'online' ? 'stop' : 'start'}` },
-    { label: '重启', suffix: 'restart', method: 'POST', type: 'warning', confirm: '确定重启账号「{name}」吗？' },
+    { labelFor: (row: any) => row.runtime_state === 'online' ? '停止' : '启动', suffix: 'start', method: 'POST', type: 'success', disabled: (row: any) => ['starting', 'stopping'].includes(row.runtime_state) || (!row.enabled && row.runtime_state !== 'online'), path: (row: any) => `/accounts/${row.id}/${row.runtime_state === 'online' ? 'stop' : 'start'}` },
+    { label: '重启', suffix: 'restart', method: 'POST', type: 'warning', disabled: (row: any) => ['starting', 'stopping'].includes(row.runtime_state) || !row.enabled, confirm: '确定重启账号「{name}」吗？' },
     { label: '测试连接', suffix: 'test-connection', method: 'POST', type: 'info', success: (data: any) => data.message || '连接测试完成' },
   ],
   deletePath: '/accounts',

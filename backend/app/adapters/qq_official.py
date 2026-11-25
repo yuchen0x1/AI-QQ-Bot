@@ -222,6 +222,7 @@ class QQOfficialAdapter(QQAdapter):
         self._openid_cache: dict[tuple[str, int], str] = {}
         self._seen_events: set[str] = set()
         self._seen_order: deque[str] = deque()
+        self._queued_inbox: set[int] = set()
         self._closing = False
         # 断线原因：网关主动要求重连（op=7 / 4009 会话超时）属于计划内轮换，
         # 与网络故障、鉴权失败区分开，调用方据此决定日志级别与账号状态。
@@ -590,12 +591,35 @@ class QQOfficialAdapter(QQAdapter):
                 )
             )
             return
+        from app.services import qq_inbox
+
+        inbox_id, status = await qq_inbox.accept(self.account_db_id, payload)
+        if status not in {"pending", "processing"} or inbox_id in self._queued_inbox:
+            return
         event = await self._to_adapter_event(event_type, data, event_id)
         if event:
+            event.raw["_inbox_id"] = inbox_id
+            self._queued_inbox.add(inbox_id)
             await self._queue.put(event)
+
+    async def recover_inbox(self) -> None:
+        from app.services import qq_inbox
+
+        for inbox_id, payload in await qq_inbox.pending(self.account_db_id):
+            if inbox_id in self._queued_inbox:
+                continue
+            event = await self._to_adapter_event(str(payload.get("t") or ""), payload.get("d") or {}, payload.get("id"))
+            if event:
+                event.raw["_inbox_id"] = inbox_id
+                self._queued_inbox.add(inbox_id)
+                await self._queue.put(event)
+
+    def release_inbox(self, inbox_id: int) -> None:
+        self._queued_inbox.discard(inbox_id)
 
     def _drain_queue(self) -> None:
         """重连前丢弃上一轮遗留的断线事件，避免刚连上就被误判为断开。"""
+        self._queued_inbox.clear()
         while True:
             try:
                 self._queue.get_nowait()
@@ -734,10 +758,6 @@ class QQOfficialAdapter(QQAdapter):
         self, event_type: str, data: dict[str, Any], event_id: Any
     ) -> AdapterEvent | None:
         if event_type in MESSAGE_EVENTS:
-            ext = self._scene_ext(data)
-            dedup_key = f"{event_type}:{data.get('id') or event_id}:{ext.get('msg_idx', '')}"
-            if not self._mark_seen(dedup_key):
-                return None
             return await self._message_event(event_type, data, event_id)
         if event_type in ROBOT_GROUP_EVENTS:
             group_openid = str(data.get("group_openid") or "")

@@ -14,6 +14,7 @@ from app.core.config import settings as app_settings
 from app.models import Account, GithubRelease, GithubRepository, PushRecord, PushRule
 from app.services.ai import service as ai_service
 from app.services.github.card import send_push_record
+from app.services.github.access import scoped_push_query
 from app.services.logs import write_log
 from app.services.templates import NOISE_ASSET_PATTERN, render_template, strip_markdown, truncate
 
@@ -204,7 +205,9 @@ async def dispatch_release(
     """按推送规则发送通知；同一规则 + 同一 Release 只会成功入库一次。"""
     from app.services.account_manager import account_manager
 
-    rule_rows = list(await db.scalars(select(PushRule).where(PushRule.repository_id == repo.id, PushRule.enabled.is_(True))))
+    if repo.archived_at is not None:
+        return []
+    rule_rows = list(await db.scalars(scoped_push_query(repo.id)))
     # 循环判据先快照成普通元组：并发投递撞唯一约束时会回滚整个会话，
     # 回滚会让会话内所有 ORM 实例过期，之后再读 rule.event_types 就会触发
     # 懒加载并抛出 MissingGreenlet（同步 IO 在异步上下文里不被允许），接口直接 500。
@@ -301,24 +304,25 @@ async def dispatch_release(
     return records
 
 
-async def retry_failed_pushes(db: AsyncSession, limit: int = 20) -> dict[str, int]:
+async def retry_failed_pushes(db: AsyncSession, limit: int = 20, *, repository_ids: list[int] | None = None) -> dict[str, int]:
     from app.services.account_manager import account_manager
 
-    rows = await db.scalars(
+    query = (
         select(PushRecord)
         .where(
             or_(PushRecord.status == "failed", and_(PushRecord.status.in_(["pending", "retrying"]),
                 PushRecord.updated_at < datetime.now(timezone.utc) - timedelta(minutes=5))),
             PushRecord.retries < app_settings.push_max_retries,
         )
-        .order_by(PushRecord.id.asc())
-        .limit(limit)
     )
+    if repository_ids is not None:
+        query = query.where(PushRecord.repository_id.in_(repository_ids))
+    rows = await db.scalars(query.order_by(PushRecord.id.asc()).limit(limit))
     stats = {"attempted": 0, "success": 0, "failed": 0}
     for record in list(rows):
         rule = await db.get(PushRule, record.rule_id, populate_existing=True)
         repo = await db.get(GithubRepository, record.repository_id, populate_existing=True)
-        if not rule or not repo or not rule.enabled or not repo.monitor_enabled or (rule.account_id, rule.qq_group) != (record.account_id, record.qq_group):
+        if not rule or not repo or repo.archived_at is not None or not rule.enabled or not repo.monitor_enabled or (rule.account_id, rule.qq_group) != (record.account_id, record.qq_group):
             record.status = "cancelled"
             record.error = "推送目标或启用状态已改变，取消旧通知"
             await db.commit()
@@ -358,6 +362,8 @@ async def resend_record(db: AsyncSession, record: PushRecord) -> PushRecord:
     rule = await db.get(PushRule, record.rule_id)
     repo = await db.get(GithubRepository, record.repository_id)
     try:
+        if repo and repo.archived_at is not None:
+            raise PermissionError("仓库所有者已删除，不能重发归档通知")
         if rule and repo:
             result = await send_push_record(db, record, rule, repo)
         else:

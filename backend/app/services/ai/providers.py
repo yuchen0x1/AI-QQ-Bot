@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -10,6 +11,8 @@ from typing import Any
 import httpx
 
 from app.core.http import new_client
+from app.core.config import settings
+from app.core.ssrf import OutboundURLError, resolve_outbound_target
 
 logger = logging.getLogger("qbot.ai")
 
@@ -78,7 +81,9 @@ class BaseAIProvider:
         max_tokens: int = 2048,
         timeout: float = 60.0,
         extra_headers: dict[str, str] | None = None,
+        provider_kind: str | None = None,
     ) -> None:
+        self.kind = provider_kind or self.kind
         self.base_url = (base_url or DEFAULT_BASE_URLS.get(self.kind, "")).rstrip("/")
         self.api_key = api_key
         self.model_name = model_name
@@ -86,6 +91,18 @@ class BaseAIProvider:
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.extra_headers = extra_headers or {}
+
+    async def _request_target(self, url: str):
+        try:
+            return await asyncio.to_thread(
+                resolve_outbound_target,
+                url,
+                base_url=self.base_url,
+                allow_http=self.kind == "ollama",
+                private_allowlist=settings.ollama_allowed_base_urls if self.kind == "ollama" else (),
+            )
+        except OutboundURLError as exc:
+            raise AIError(f"接口地址被安全策略拒绝：{exc}") from exc
 
     async def chat(self, messages: list[dict[str, str]], system: str | None = None) -> ChatResult:
         raise NotImplementedError
@@ -97,14 +114,17 @@ class BaseAIProvider:
     # ------------------------------------------------------------------
     async def _post(self, url: str, *, headers: dict[str, str], json_body: dict[str, Any]) -> dict[str, Any]:
         started = time.perf_counter()
+        target = await self._request_target(url)
         try:
-            async with new_client(timeout=self.timeout) as client:
+            async with new_client(timeout=self.timeout, follow_redirects=False, target=target) as client:
                 response = await client.post(url, headers={**self.extra_headers, **headers}, json=json_body)
         except httpx.TimeoutException as exc:
-            raise AITimeout(f"请求超时（{self.timeout}s）：{exc}") from exc
+            raise AITimeout(f"请求超时（{self.timeout}s）") from exc
         except httpx.HTTPError as exc:
-            raise AIError(f"网络错误：{exc}") from exc
+            raise AIError(f"网络错误：{type(exc).__name__}") from exc
         elapsed = int((time.perf_counter() - started) * 1000)
+        if 300 <= response.status_code < 400:
+            raise AIError("供应商返回重定向，已拒绝跟随；请配置最终 HTTPS 接口地址")
         if response.status_code >= 400:
             body = response.text[:500]
             raise AIError(f"HTTP {response.status_code}: {body}")
@@ -116,13 +136,16 @@ class BaseAIProvider:
         return data
 
     async def _get(self, url: str, *, headers: dict[str, str]) -> dict[str, Any]:
+        target = await self._request_target(url)
         try:
-            async with new_client(timeout=self.timeout) as client:
+            async with new_client(timeout=self.timeout, follow_redirects=False, target=target) as client:
                 response = await client.get(url, headers={**self.extra_headers, **headers})
         except httpx.TimeoutException as exc:
-            raise AITimeout(f"请求超时（{self.timeout}s）：{exc}") from exc
+            raise AITimeout(f"请求超时（{self.timeout}s）") from exc
         except httpx.HTTPError as exc:
-            raise AIError(f"网络错误：{exc}") from exc
+            raise AIError(f"网络错误：{type(exc).__name__}") from exc
+        if 300 <= response.status_code < 400:
+            raise AIError("供应商返回重定向，已拒绝跟随；请配置最终 HTTPS 接口地址")
         if response.status_code >= 400:
             raise AIError(f"HTTP {response.status_code}: {response.text[:500]}")
         try:
@@ -352,4 +375,5 @@ def build_provider(
         max_tokens=max_tokens,
         timeout=timeout,
         extra_headers=extra_headers,
+        provider_kind=kind,
     )

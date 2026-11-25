@@ -6,12 +6,13 @@ import asyncio
 import contextlib
 import logging
 import random
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,6 +71,7 @@ class RuntimeState:
     meta: dict[str, Any] = field(default_factory=dict)
     lease_id: str | None = None
     lease_renew_task: asyncio.Task | None = None
+    lease_valid_until: float = 0.0
 
     @property
     def online_seconds(self) -> int:
@@ -119,11 +121,12 @@ class AccountManager:
 
     def adapter(self, account_db_id: int) -> QQAdapter | None:
         state = self._runtimes.get(account_db_id)
-        return state.adapter if state and state.state == "online" else None
+        valid = state and (not state.lease_id or state.lease_valid_until > time.monotonic())
+        return state.adapter if valid and state.state == "online" and not state.stop_requested else None
 
     def is_online(self, account_db_id: int) -> bool:
-        state = self._runtimes.get(account_db_id)
-        return bool(state and state.state == "online" and state.adapter and state.adapter.connected)
+        adapter = self.adapter(account_db_id)
+        return bool(adapter and adapter.connected)
 
     def capabilities(self, account_db_id: int) -> dict[str, bool]:
         adapter = self.adapter(account_db_id)
@@ -147,6 +150,7 @@ class AccountManager:
                 except AdapterError as exc:
                     raise ValueError(str(exc)) from exc
                 lease_id = uuid.uuid4().hex
+                lease_started = time.monotonic()
                 if not await self._acquire_lease(db, account.id, lease_id):
                     raise ValueError("账号已被其它运行实例占用，请稍后重试")
                 state = RuntimeState(
@@ -156,6 +160,7 @@ class AccountManager:
                     adapter=adapter,
                     state="starting",
                     lease_id=lease_id,
+                    lease_valid_until=lease_started + settings.account_lease_seconds,
                 )
                 if reset_attempts:
                     state.attempts = 0
@@ -179,6 +184,9 @@ class AccountManager:
             return None
         state.stop_requested = True
         state.state = "stopping"
+        from app.services.bot_engine import engine
+
+        await engine.cancel_account(account_db_id)
         if state.lease_renew_task and not state.lease_renew_task.done():
             state.lease_renew_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -279,7 +287,11 @@ class AccountManager:
 
                 from app.services.bot_engine import engine  # 延迟导入避免循环依赖
 
+                if isinstance(adapter, QQOfficialAdapter):
+                    await adapter.recover_inbox()
                 async for event in adapter.listen():
+                    if state.stop_requested or state.lease_valid_until <= time.monotonic():
+                        raise AdapterError("账号运行租约无法确认，停止处理事件")
                     if event.post_type == "__disconnected__":
                         # 网关 op=7 / 4009 会话超时属于计划内轮换：不算故障。
                         meta = event.raw or {}
@@ -294,12 +306,33 @@ class AccountManager:
                             async with SessionLocal() as db:
                                 await self._set_connection(db, account_db_id, heartbeat=datetime.now(timezone.utc))
                         continue
+                    inbox_id = 0
+                    claim_id = None
                     try:
+                        from app.services import qq_inbox
+
+                        inbox_id = int((event.raw or {}).get("_inbox_id") or 0)
+                        claim_id = await qq_inbox.claim(inbox_id) if inbox_id else None
+                        if inbox_id and not claim_id:
+                            if isinstance(adapter, QQOfficialAdapter):
+                                adapter.release_inbox(inbox_id)
+                            continue
+                        event.raw["_inbox_claim"] = claim_id
+                        event.raw.pop("_inbox_deferred", None)
+                        event_adapter = qq_inbox.EventAdapter(adapter, inbox_id, claim_id) if claim_id else adapter
                         async with SessionLocal() as db:
-                            await engine.handle_event(db, account_db_id, adapter, event)
+                            await engine.handle_event(db, account_db_id, event_adapter, event)
+                        if inbox_id and claim_id and not event.raw.get("_inbox_deferred"):
+                            await qq_inbox.finish(inbox_id, claim_id)
+                            adapter.release_inbox(inbox_id)
                         if event.post_type == "message":
                             state.messages_received += 1
                     except Exception as exc:  # noqa: BLE001
+                        if inbox_id and claim_id:
+                            with contextlib.suppress(Exception):
+                                await qq_inbox.finish(inbox_id, claim_id, error=f"{type(exc).__name__}: {exc}")
+                            if isinstance(adapter, QQOfficialAdapter):
+                                adapter.release_inbox(inbox_id)
                         logger.exception("处理事件失败 account=%s: %s", account_db_id, exc)
                         async with SessionLocal() as db:
                             await write_log(
@@ -383,44 +416,56 @@ class AccountManager:
         publish_event("account.state", {"account_id": account_db_id, "state": "stopped"})
 
     async def _acquire_lease(self, db: AsyncSession, account_db_id: int, lease_id: str) -> bool:
-        conn = await db.scalar(
-            select(AccountConnection).where(AccountConnection.account_id == account_db_id).with_for_update()
-        )
-        if not conn:
-            conn = AccountConnection(account_id=account_db_id)
-            db.add(conn)
-            await db.flush()
         now = datetime.now(timezone.utc)
-        if conn.lease_id and conn.lease_expires_at:
-            expires = conn.lease_expires_at
-            if expires.tzinfo is None:
-                expires = expires.replace(tzinfo=timezone.utc)
-            if expires > now:
-                return False
-        conn.lease_owner = settings.runtime_instance_id
-        conn.lease_id = lease_id
-        conn.lease_expires_at = now + timedelta(seconds=settings.account_lease_seconds)
+        insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+        stmt = insert(AccountConnection).values(
+            account_id=account_db_id, lease_owner=settings.runtime_instance_id, lease_id=lease_id,
+            lease_expires_at=now + timedelta(seconds=settings.account_lease_seconds),
+        ).on_conflict_do_update(
+            index_elements=[AccountConnection.account_id],
+            set_={"lease_owner": settings.runtime_instance_id, "lease_id": lease_id,
+                  "lease_expires_at": now + timedelta(seconds=settings.account_lease_seconds)},
+            where=or_(AccountConnection.lease_id.is_(None), AccountConnection.lease_expires_at.is_(None),
+                      AccountConnection.lease_expires_at <= now),
+        ).returning(AccountConnection.account_id)
+        result = await db.scalar(stmt)
         await db.commit()
-        return True
+        return result is not None
 
     async def _renew_lease(self, account_db_id: int, lease_id: str | None) -> bool:
         if not lease_id:
             return False
+        now = datetime.now(timezone.utc)
         async with SessionLocal() as db:
-            conn = await db.scalar(select(AccountConnection).where(AccountConnection.account_id == account_db_id))
-            if not conn or conn.lease_id != lease_id:
-                return False
-            conn.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.account_lease_seconds)
+            result = await db.execute(update(AccountConnection).where(
+                AccountConnection.account_id == account_db_id, AccountConnection.lease_id == lease_id,
+                AccountConnection.lease_owner == settings.runtime_instance_id, AccountConnection.lease_expires_at > now,
+            ).values(lease_expires_at=now + timedelta(seconds=settings.account_lease_seconds)))
             await db.commit()
-            return True
+            return result.rowcount == 1
 
     async def _renew_lease_loop(self, account_db_id: int) -> None:
         state = self._runtimes.get(account_db_id)
         while state and not state.stop_requested:
-            await asyncio.sleep(max(3, settings.account_lease_renew_seconds))
-            if not await self._renew_lease(account_db_id, state.lease_id):
+            await asyncio.sleep(max(1, min(settings.account_lease_renew_seconds, settings.account_lease_seconds / 3)))
+            try:
+                renewed_at = time.monotonic()
+                owned = await asyncio.wait_for(
+                    self._renew_lease(account_db_id, state.lease_id),
+                    timeout=max(1, settings.account_lease_seconds / 3),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("账号 %s 续租失败，按失权处理", account_db_id)
+                owned = False
+            if not owned:
                 await self._on_lease_lost(account_db_id, state)
                 return
+            state.lease_valid_until = renewed_at + settings.account_lease_seconds
+            if state.state == "online" and isinstance(state.adapter, QQOfficialAdapter):
+                with contextlib.suppress(Exception):
+                    await state.adapter.recover_inbox()
 
     async def _on_lease_lost(self, account_db_id: int, state: RuntimeState) -> None:
         """租约被其它实例接管后必须真正停掉本实例的连接。
@@ -431,6 +476,10 @@ class AccountManager:
         """
         state.stop_requested = True
         state.state = "error"
+        state.lease_valid_until = 0
+        from app.services.bot_engine import engine
+
+        await engine.cancel_account(account_db_id)
         logger.warning("账号 %s 运行租约已失效，主动断开本实例连接", state.name)
         publish_event(
             "account.state",
@@ -456,11 +505,10 @@ class AccountManager:
                 )
 
     async def _release_lease(self, db: AsyncSession, account_db_id: int, lease_id: str | None) -> None:
-        conn = await db.scalar(select(AccountConnection).where(AccountConnection.account_id == account_db_id))
-        if conn and (lease_id is None or conn.lease_id == lease_id):
-            conn.lease_owner = None
-            conn.lease_id = None
-            conn.lease_expires_at = None
+        if lease_id:
+            await db.execute(update(AccountConnection).where(
+                AccountConnection.account_id == account_db_id, AccountConnection.lease_id == lease_id,
+            ).values(lease_owner=None, lease_id=None, lease_expires_at=None))
             await db.commit()
 
     async def _set_connection(
@@ -477,6 +525,9 @@ class AccountManager:
         reconnect_attempts: int | None = None,
     ) -> None:
         conn = await db.scalar(select(AccountConnection).where(AccountConnection.account_id == account_db_id))
+        state = self._runtimes.get(account_db_id)
+        if conn and state and state.lease_id and conn.lease_id != state.lease_id:
+            return
         if not conn:
             conn = AccountConnection(account_id=account_db_id)
             db.add(conn)

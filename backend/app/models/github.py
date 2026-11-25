@@ -34,9 +34,9 @@ class GithubRepository(Base, TimestampMixin):
     language: Mapped[str | None] = mapped_column(String(64))
     stars: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     forks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    # 仓库归属：由谁通过网页/OAuth 添加；为空表示历史数据或全局共享仓库。
-    # SQLite 不支持 ALTER TABLE 追加外键，这里用软引用 + 应用层清空（删除用户时置空）。
+    # 归属是软引用；删除用户后保留原 ID 并归档，不能置空而变成历史全局共享。
     owner_user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     token_enc: Mapped[str | None] = mapped_column(Text)
     webhook_secret_enc: Mapped[str | None] = mapped_column(Text)
     monitor_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

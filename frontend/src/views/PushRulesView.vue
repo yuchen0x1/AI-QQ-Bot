@@ -1,21 +1,25 @@
 <template><ResourceView :config="config" /></template>
 <script setup lang="ts">
-import { onMounted, reactive } from 'vue'
+import { onMounted, reactive, watchEffect } from 'vue'
 import { api } from '../api'
 import ResourceView from '../components/ResourceView.vue'
+import { useAccountDirectory } from '../composables/useAccountDirectory'
+import { groupNumberText, groupTitle } from '../groupDisplay'
 
-// 「目标群聊」按所选账号联动下拉：官方机器人只有平台映射 ID、没有真实群号，
-// 手填群号几乎必错，所以改成选账号 → 自动拉取该账号已建档群聊 → 下拉直接选。
+const directory = useAccountDirectory<any>(async (accountId, page, keyword) => (await api.get('/groups', { params: { account_id: accountId, page, keyword, page_size: 50 } })).data)
+function groupField() {
+  return { key:'qq_group', label:'目标 QQ 群', type:'select', required:true, options:[], placeholder:'请先选择发送账号，再选择群聊', remoteMethod:(query: string) => directory.load(directory.accountId.value, query), loadMore:directory.more }
+}
 const config = reactive<any>({
   kicker:'DELIVERY ROUTING',title:'推送规则',description:'配置仓库更新消息由哪个 QQ 账号发送至哪个群。官方机器人请先在群里 @ 机器人一次完成建档，再在这里下拉选择目标群聊；没有可选群聊时，请先到「群聊管理」确认映射 ID。',endpoint:'/github/push-rules',itemName:'推送规则',nameKey:'repo_full_name',paged:false,actionWidth:90,
   emptyText:'尚未配置推送规则',
   emptyHint:'先添加一条规则，选择监控仓库、发送账号和目标群聊；群聊必须先由机器人在群内完成建档。',
-  columns:[{key:'repo_full_name',label:'GitHub 仓库',width:170},{key:'account_name',label:'发送账号',width:140},{key:'qq_group_display',label:'目标 QQ 群',width:170},{key:'only_stable',label:'仅正式版',type:'bool',width:95},{key:'ai_summary',label:'AI 摘要',type:'bool',width:85},{key:'markdown_card',label:'卡片',type:'bool',width:80},{key:'total_pushed',label:'已推送',width:80},{key:'enabled',label:'规则状态',type:'bool',width:95}],
+  columns:[{key:'repo_full_name',label:'GitHub 仓库',width:170},{key:'account_name',label:'发送账号',width:140},{key:'qq_group',label:'目标 QQ 群',width:180,format:(_value: any,row: any)=>groupNumberText({display_number:row.qq_group_display,group_number:row.qq_group})},{key:'only_stable',label:'仅正式版',type:'bool',width:95},{key:'ai_summary',label:'AI 摘要',type:'bool',width:85},{key:'markdown_card',label:'卡片',type:'bool',width:80},{key:'total_pushed',label:'已推送',width:80},{key:'enabled',label:'规则状态',type:'bool',width:95}],
   createLabel:'新增规则',
   createFields:[
     {key:'repository_id',label:'监控仓库',type:'select',required:true,options:[]},
     {key:'account_id',label:'发送 QQ 账号',type:'select',required:true,options:[],onChange:(v:number, form:any)=>loadGroupOptions(v, form)},
-    {key:'qq_group',label:'目标 QQ 群',type:'select',required:true,options:[],placeholder:'请先选择发送账号，再选择群聊'},
+    groupField(),
     {key:'only_stable',label:'仅正式版本',type:'switch',default:true},
     {key:'include_changelog',label:'附带更新日志',type:'switch',default:true},
     {key:'include_downloads',label:'附带下载地址',type:'switch',default:true},
@@ -25,7 +29,7 @@ const config = reactive<any>({
     {key:'template',label:'消息模板（可选）',type:'textarea',placeholder:'支持 {repo_name}、{version}、{changelog}、{release_url}、{downloads} 等字段'}],
   editFields:[
     {key:'account_id',label:'发送 QQ 账号',type:'select',options:[],onChange:(v:number, form:any)=>loadGroupOptions(v, form)},
-    {key:'qq_group',label:'目标 QQ 群',type:'select',options:[],placeholder:'请先选择发送账号，再选择群聊'},
+    groupField(),
     {key:'only_stable',label:'仅正式版本',type:'switch'},
     {key:'include_changelog',label:'附带更新日志',type:'switch'},
     {key:'include_downloads',label:'附带下载地址',type:'switch'},
@@ -37,24 +41,21 @@ const config = reactive<any>({
   onDialogOpen: (editing: boolean, row: any) => { loadGroupOptions(editing ? row?.account_id : undefined) },
 })
 
-function groupLabel(g: any) { return `${g.display_name || '未标注群号'}（${g.display_number || '群号待标注'}）` }
-
 async function loadGroupOptions(accountId?: number, form?: Record<string, any>) {
-  const createField = config.createFields.find((f: any) => f.key === 'qq_group')
-  const editField = config.editFields.find((f: any) => f.key === 'qq_group')
-  // Changing the sending account invalidates the previously selected group.
   if (form) form.qq_group = null
-  try {
-    if (!accountId) { createField.options = []; editField.options = []; return }
-    const { data } = await api.get('/groups', { params: { account_id: accountId, page: 1, page_size: 200 } })
-    const opts = (data.items || []).map((g: any) => ({ value: g.group_number, label: groupLabel(g) }))
-    createField.options = opts
-    editField.options = opts
-  } catch {
-    createField.options = []
-    editField.options = []
-  }
+  await directory.load(accountId ? Number(accountId) : null)
 }
+
+watchEffect(() => {
+  for (const fields of [config.createFields, config.editFields]) {
+    const field = fields.find((item: any) => item.key === 'qq_group')
+    field.options = directory.items.value.map(group => ({ value:group.group_number, label:`${groupTitle(group)} · ${groupNumberText(group)}` }))
+    field.loading = directory.loading.value
+    field.disabled = !directory.accountId.value
+    field.hasMore = directory.items.value.length < directory.total.value
+    field.error = directory.error.value
+  }
+})
 
 onMounted(async () => {
   try {
@@ -63,13 +64,6 @@ onMounted(async () => {
     const accountOpts = accounts.data.map((a: any) => ({ value: a.id, label: `${a.name} · ${a.qq_number || a.app_id || '未登录'}` }))
     config.createFields[1].options = accountOpts
     config.editFields[0].options = accountOpts
-    // 列表列：把所有账号已建档群聊映射成「群名（ID）」展示，无需用户认识映射群号
-    const all: any[] = []
-    for (const a of accounts.data) {
-      try { const { data } = await api.get('/groups', { params: { account_id: a.id, page: 1, page_size: 200 } }); all.push(...(data.items || [])) } catch {}
-    }
-    const col = config.columns.find((c: any) => c.key === 'qq_group_display')
-    if (col) col.options = all.map((g: any) => ({ value: g.display_number, label: groupLabel(g) }))
   } catch {}
 })
 </script>

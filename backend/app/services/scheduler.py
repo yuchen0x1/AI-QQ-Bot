@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import Account, GithubRepository, ScheduledTask, TaskRecord
+from app.models.task import QueueExecution
 from app.services.logs import write_log
 from app.services.task_queue import redis_task_queue
 
@@ -29,13 +32,23 @@ async def _task_github_check(payload: dict[str, Any]) -> dict[str, Any]:
 
     async with SessionLocal() as db:
         repo_id = payload.get("repository_id")
+        scope = payload.get("_repository_scope")
         if repo_id:
+            if scope is not None and int(repo_id) not in scope:
+                raise ValueError("任务不再拥有此仓库的访问权限")
             repo = await db.get(GithubRepository, int(repo_id))
             if not repo:
                 raise ValueError(f"仓库 {repo_id} 不存在")
             result = await check_repository(db, repo)
             return {"checked": 1, "new_releases": result.get("new_releases", 0), "ok": result.get("ok")}
-        results = await check_all_repositories(db, only_enabled=True)
+        if scope is None:
+            results = await check_all_repositories(db, only_enabled=True)
+        else:
+            repositories = list(await db.scalars(select(GithubRepository).where(
+                GithubRepository.id.in_(scope), GithubRepository.monitor_enabled.is_(True),
+                GithubRepository.remote_available.is_(True),
+            )))
+            results = [await check_repository(db, repository) for repository in repositories]
         return {
             "checked": len(results),
             "new_releases": sum(int(r.get("new_releases") or 0) for r in results),
@@ -147,6 +160,7 @@ async def _task_ai_summary(payload: dict[str, Any]) -> dict[str, Any]:
             model,
             [{"role": "user", "content": f"请总结以下群聊记录（{hours} 小时内）：\n{transcript}"}],
             system="你是群聊总结助手，输出条理清晰的中文摘要，包含主要话题、重要结论和待办事项。",
+            account_id=account_id, group_number=group_number,
         )
         if not result:
             raise RuntimeError(f"AI 总结失败：{error}")
@@ -184,7 +198,9 @@ async def _task_push_retry(payload: dict[str, Any]) -> dict[str, Any]:
     from app.services.github.notify import retry_failed_pushes
 
     async with SessionLocal() as db:
-        stats = await retry_failed_pushes(db, limit=int(payload.get("limit") or 20))
+        stats = await retry_failed_pushes(
+            db, limit=int(payload.get("limit") or 20), repository_ids=payload.get("_repository_scope"),
+        )
     return stats
 
 
@@ -323,6 +339,9 @@ class SchedulerService:
         self.scheduler = AsyncIOScheduler(timezone=settings.scheduler_timezone, job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 120})
         self._locks: dict[str, asyncio.Lock] = {}
         self._started = False
+        self._requested = False
+        self._owner_token = uuid4().hex
+        self._ownership_task: asyncio.Task | None = None
 
     @property
     def running(self) -> bool:
@@ -333,17 +352,91 @@ class SchedulerService:
 
     # ------------------------------------------------------------------
     async def start(self) -> None:
-        if self._started:
+        if self._requested:
             return
-        self.scheduler.start()
-        self._started = True
-        await self.reload()
-        logger.info("调度器已启动，已加载 %s 个任务", self.job_count())
+        self._requested = True
+        try:
+            await self._try_ownership()
+        except Exception:
+            logger.exception("调度器暂不能取得所有权，保持待机")
+        self._ownership_task = asyncio.create_task(self._ownership_loop(), name="scheduler-owner")
 
     async def shutdown(self) -> None:
+        from app.services import runtime_lease
+
+        self._requested = False
+        if self._ownership_task:
+            self._ownership_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._ownership_task
+        await self._deactivate()
+        with contextlib.suppress(Exception):
+            await runtime_lease.release("scheduler", self._owner_token)
+
+    async def _deactivate(self) -> None:
         if self._started:
             self.scheduler.shutdown(wait=False)
             self._started = False
+            await asyncio.sleep(0)
+
+    async def _try_ownership(self) -> None:
+        from app.services import runtime_lease
+
+        if not await runtime_lease.acquire("scheduler", self._owner_token, seconds=settings.account_lease_seconds):
+            return
+        self.scheduler = AsyncIOScheduler(
+            timezone=settings.scheduler_timezone,
+            job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 120},
+        )
+        self.scheduler.start(paused=True)
+        self._started = True
+        try:
+            await self.reload()
+            if not await self._owns_scheduling():
+                return
+            self.scheduler.resume()
+            logger.info("调度器已获得唯一所有权，已加载 %s 个任务", self.job_count())
+        except BaseException:
+            await self._deactivate()
+            with contextlib.suppress(Exception):
+                await runtime_lease.release("scheduler", self._owner_token)
+            raise
+
+    async def _owns_scheduling(self) -> bool:
+        from app.services import runtime_lease
+
+        if not self._started:
+            return False
+        try:
+            owned = await asyncio.wait_for(runtime_lease.renew(
+                "scheduler", self._owner_token, seconds=settings.account_lease_seconds,
+            ), timeout=max(1, settings.account_lease_seconds / 3))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("调度器续租失败，停止本实例的调度")
+            owned = False
+        if not owned:
+            await self._deactivate()
+        return owned
+
+    async def _ownership_loop(self) -> None:
+        while self._requested:
+            await asyncio.sleep(max(1, min(settings.account_lease_renew_seconds, settings.account_lease_seconds / 3)))
+            try:
+                if self._started:
+                    await self._owns_scheduling()
+                else:
+                    await self._try_ownership()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("调度器所有权检查失败，保留待机状态")
+                await self._deactivate()
+
+    async def _run_owned(self, handler: Callable, **kwargs) -> None:
+        if await self._owns_scheduling():
+            await handler(**kwargs)
 
     async def reload(self) -> None:
         async with SessionLocal() as db:
@@ -355,10 +448,12 @@ class SchedulerService:
             self.schedule_repo_poll(repo)
         from app.services.github.automation import tick_subscriptions
 
-        self.scheduler.add_job(tick_subscriptions, "interval", seconds=60, id="github:subscriptions", replace_existing=True,
+        self.scheduler.add_job(self._run_owned, "interval", seconds=60, id="github:subscriptions", replace_existing=True,
+                               kwargs={"handler": tick_subscriptions},
                                next_run_time=datetime.now(timezone.utc), max_instances=1, coalesce=True)
         from app.services.email_alerts import dispatch_email_alerts
-        self.scheduler.add_job(dispatch_email_alerts, "interval", seconds=30, id="system:email-alerts", replace_existing=True,
+        self.scheduler.add_job(self._run_owned, "interval", seconds=30, id="system:email-alerts", replace_existing=True,
+                               kwargs={"handler": dispatch_email_alerts},
                                max_instances=1, coalesce=True)
         logger.info("调度任务已重载：%s 个自定义任务，%s 个仓库轮询", len(tasks), len(repos))
 
@@ -430,6 +525,8 @@ class SchedulerService:
     async def _poll_repo(self, repo_id: int) -> None:
         from app.services.github.monitor import check_repository
 
+        if not await self._owns_scheduling():
+            return
         lock = self._locks.setdefault(f"repo:{repo_id}", asyncio.Lock())
         if lock.locked():
             logger.info("仓库 %s 上一次检查尚未结束，跳过本次", repo_id)
@@ -448,6 +545,8 @@ class SchedulerService:
                     logger.exception("仓库轮询失败: %s", exc)
 
     async def _execute_job(self, task_id: int) -> None:
+        if not await self._owns_scheduling():
+            return
         if redis_task_queue.enabled and await self._task_can_go_to_queue(task_id):
             try:
                 await redis_task_queue.enqueue(task_id, trigger="schedule")
@@ -507,7 +606,10 @@ class SchedulerService:
             )
             return record
 
-    async def execute_task(self, task_id: int, *, trigger: str = "manual") -> TaskRecord:
+    async def execute_task(
+        self, task_id: int, *, trigger: str = "manual", queue_job_id: str | None = None,
+        queue_claim_id: str | None = None,
+    ) -> TaskRecord:
         lock = self._locks.setdefault(f"task:{task_id}", asyncio.Lock())
         if lock.locked():
             logger.info("任务 %s 正在执行，跳过重复触发", task_id)
@@ -518,9 +620,11 @@ class SchedulerService:
                 await db.commit()
                 return record
         async with lock:
-            return await self._run_task(task_id, trigger)
+            return await self._run_task(task_id, trigger, queue_job_id=queue_job_id, queue_claim_id=queue_claim_id)
 
-    async def _run_task(self, task_id: int, trigger: str) -> TaskRecord:
+    async def _run_task(
+        self, task_id: int, trigger: str, *, queue_job_id: str | None = None, queue_claim_id: str | None = None,
+    ) -> TaskRecord:
         async with SessionLocal() as db:
             task = await db.get(ScheduledTask, task_id)
             if not task:
@@ -530,7 +634,8 @@ class SchedulerService:
             record: TaskRecord | None = None
             while True:
                 record = TaskRecord(
-                    task_id=task.id, task_name=task.name, trigger=trigger, status="running", retries=attempt
+                    task_id=task.id, task_name=task.name, trigger=trigger, status="running", retries=attempt,
+                    queue_job_id=queue_job_id,
                 )
                 db.add(record)
                 await db.commit()
@@ -540,7 +645,10 @@ class SchedulerService:
                 try:
                     if not handler:
                         raise ValueError(f"未知任务类型：{task.task_type}")
-                    result = await asyncio.wait_for(handler(task.payload or {}), timeout=task.timeout_seconds)
+                    from app.services.task_policy import execution_payload
+
+                    validated_payload = await execution_payload(db, task)
+                    result = await asyncio.wait_for(handler(validated_payload), timeout=task.timeout_seconds)
                     record.status = "success"
                 except Exception as exc:  # noqa: BLE001
                     record.status = "failed"
@@ -558,6 +666,15 @@ class SchedulerService:
                 job = self.scheduler.get_job(f"task:{task.id}") if self.scheduler.running else None
                 if job and job.next_run_time:
                     task.next_run_at = job.next_run_time
+                if record.status == "success" and queue_job_id and queue_claim_id:
+                    # The known-success record and replay guard share one DB
+                    # transaction, closing the crash gap before Redis ACK.
+                    receipt = await db.execute(update(QueueExecution).where(
+                        QueueExecution.job_id == queue_job_id, QueueExecution.claim_id == queue_claim_id,
+                        QueueExecution.status == "processing", QueueExecution.lease_until > finished,
+                    ).values(status="success", record_id=record.id, updated_at=finished))
+                    if receipt.rowcount != 1:
+                        raise RuntimeError("queue execution ownership lost before result commit")
                 await db.commit()
                 await write_log(
                     db,

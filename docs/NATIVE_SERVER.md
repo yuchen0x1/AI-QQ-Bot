@@ -9,6 +9,7 @@
 - `/opt/qbot/venv`：Python 虚拟环境，安装 `backend/requirements.txt`。
 - `/etc/qbot/qbot.env`：生产配置，root 所有、qbot 组可读，权限 0640。
 - `/var/lib/qbot`：SQLite 数据库和独立的 Agent Mail 授权目录，qbot 所有、权限 0700。
+- `/var/lib/qbot/plugins`：持久自定义插件代码，默认由 `DATA_DIR/plugins` 决定；与只读版本内置插件分开，升级前保留此目录、manifest、绑定和配置。
 - `/var/backups/qbot`：备份目录，qbot 所有、权限 0700。
 
 创建无交互登录的 `qbot` 系统用户。安装 [systemd 服务模板](../scripts/systemd/qbot.service) 后执行 `systemctl daemon-reload` 和 `systemctl enable --now qbot`。后端只监听 `127.0.0.1:8000`，由 Nginx 对外提供 80 / 443。
@@ -20,6 +21,8 @@ DATABASE_URL=sqlite+aiosqlite:////var/lib/qbot/qbot.db
 DATA_DIR=/var/lib/qbot
 BACKUP_DIR=/var/backups/qbot
 PLUGIN_DIR=/opt/qbot/current/backend/plugins
+# 可选；默认 DATA_DIR/plugins。自定义插件不要放进 current 版本目录。
+PLUGIN_EXTENSIONS_DIR=/var/lib/qbot/plugins
 REDIS_ENABLED=false
 SCHEDULER_ENABLED=true
 AGENTLY_CLI_PATH=/usr/local/bin/agently-cli

@@ -63,7 +63,7 @@ def test_pure_local_tasks_can_use_queue() -> None:
         assert task_type not in CONNECTION_BOUND_TASKS
 
 
-async def test_queue_skips_connection_bound_task(client: httpx.AsyncClient, admin_headers: dict) -> None:
+async def test_queue_skips_connection_bound_task(client: httpx.AsyncClient, admin_headers: dict, mock_account: dict) -> None:
     """调度器不应把需要 adapter 的任务投递给 worker。"""
     from app.db.session import SessionLocal
     from app.models import ScheduledTask
@@ -77,7 +77,7 @@ async def test_queue_skips_connection_bound_task(client: httpx.AsyncClient, admi
             "task_type": "group_message",
             "schedule_kind": "interval",
             "interval_seconds": 600,
-            "payload": {"account_id": 1, "group_number": 1, "content": "x"},
+            "payload": {"account_id": mock_account["id"], "group_number": 900001, "content": "x"},
             "enabled": True,
         },
     )

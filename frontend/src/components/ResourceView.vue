@@ -7,21 +7,21 @@
     </div>
     <div class="heading-actions resource-heading-actions">
       <el-button
-        v-if="config.secondaryAction"
+        v-if="config.secondaryAction && can(config.secondaryAction.permission || managePermission)"
         :icon="config.secondaryAction.icon || Refresh"
         @click="runSecondary"
       >
         {{ config.secondaryAction.label }}
       </el-button>
       <el-button
-        v-if="config.secondaryCreateLabel"
+        v-if="config.secondaryCreateLabel && canManage"
         :icon="config.secondaryCreateIcon || 'Setting'"
         @click="openRawCreate"
       >
         {{ config.secondaryCreateLabel }}
       </el-button>
       <el-button
-        v-if="config.extraCreateLabel"
+        v-if="config.extraCreateLabel && can(config.extraCreatePermission || managePermission)"
         :icon="config.extraCreateIcon || 'Iphone'"
         @click="runExtraCreate"
       >
@@ -188,7 +188,7 @@
                 {{ getValue(scope.row, col.key) || '—' }}
               </a>
             </template>
-            <template v-else>{{ display(getValue(scope.row, col.key), col) }}</template>
+            <template v-else>{{ display(getValue(scope.row, col.key), col, scope.row) }}</template>
           </template>
         </el-table-column>
 
@@ -206,12 +206,13 @@
                 :key="actionKey(action, actionIndex)"
                 link
                 :type="action.type || 'primary'"
+                :disabled="actionDisabled(action, scope.row)"
                 @click="runAction(action, scope.row)"
               >
                 {{ action.labelFor?.(scope.row) || action.label }}
               </el-button>
               <el-button
-                v-if="config.editFields?.length"
+                v-if="canManage && config.editFields?.length"
                 link
                 type="primary"
                 :aria-label="`编辑${config.itemName || '记录'} ${rowName(scope.row)}`"
@@ -220,7 +221,7 @@
                 {{ config.editLabel || '编辑' }}
               </el-button>
               <el-button
-                v-if="config.deletePath"
+                v-if="canManage && config.deletePath"
                 link
                 type="danger"
                 :aria-label="`删除${config.itemName || '记录'} ${rowName(scope.row)}`"
@@ -342,13 +343,14 @@
               size="small"
               plain
               :type="action.type || 'primary'"
+              :disabled="actionDisabled(action, row)"
               :aria-label="`${action.labelFor?.(row) || action.label} ${rowName(row)}`"
               @click="runAction(action, row)"
             >
               {{ action.labelFor?.(row) || action.label }}
             </el-button>
             <el-button
-              v-if="config.editFields?.length"
+              v-if="canManage && config.editFields?.length"
               size="small"
               plain
               type="primary"
@@ -359,7 +361,7 @@
               {{ config.editLabel || '编辑' }}
             </el-button>
             <el-button
-              v-if="config.deletePath"
+              v-if="canManage && config.deletePath"
               size="small"
               plain
               type="danger"
@@ -457,6 +459,10 @@
           v-model="form[field.key]"
           :placeholder="field.placeholder || '请选择'"
           clearable
+          :filterable="Boolean(field.filterable || field.remoteMethod)"
+          :remote="Boolean(field.remoteMethod)"
+          :remote-method="field.remoteMethod"
+          :loading="Boolean(field.loading)"
           :disabled="field.disabled || field.readonly"
           @change="field.onChange ? field.onChange($event, form) : undefined"
         >
@@ -466,6 +472,9 @@
             :label="option.label"
             :value="option.value"
           />
+          <template v-if="field.loadMore && field.hasMore" #footer>
+            <el-button link :loading="Boolean(field.loading)" @click="field.loadMore()">加载更多群聊</el-button>
+          </template>
         </el-select>
         <el-switch
           v-else-if="field.type === 'switch'"
@@ -497,6 +506,7 @@
           :disabled="!!field.disabled"
           :readonly="!!field.readonly"
         />
+        <el-alert v-if="field.error" type="error" :title="field.error" :closable="false" />
       </el-form-item>
     </el-form>
 
@@ -515,6 +525,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { api } from '../api'
 import AppIcon from './AppIcon.vue'
+import { usePermissions } from '../composables/usePermissions'
 
 const props = defineProps<{ config: any }>()
 const config = computed(() => props.config)
@@ -530,9 +541,15 @@ const pageSize = ref(20)
 const total = ref(0)
 const loadError = ref('')
 const loadedOnce = ref(false)
+const { can } = usePermissions()
+const busyRows = reactive(new Set<number>())
+let loadSequence = 0
+const managePermissions: Record<string, string> = { accounts: 'account:manage', tasks: 'task:manage', plugins: 'plugin:manage', 'push-rules': 'push:manage', github: 'github:manage' }
+const managePermission = computed(() => config.value.managePermission || (/^\/github\/push-(rules|records)(\/|$)/.test(config.value.endpoint) ? 'push:manage' : managePermissions[String(config.value.endpoint).split('/')[1]]) || 'system:manage')
+const canManage = computed(() => can(managePermission.value))
 
 const paged = computed(() => config.value.paged !== false)
-const canCreate = computed(() => Boolean(config.value.createFields?.length && !config.value.hideCreate))
+const canCreate = computed(() => canManage.value && Boolean(config.value.createFields?.length && !config.value.hideCreate))
 const hasRowActions = computed(() =>
   Boolean(config.value.actions?.length || config.value.editFields?.length || config.value.deletePath),
 )
@@ -642,19 +659,21 @@ function errorText(error: any) {
 }
 
 async function load(target?: number) {
+  const sequence = ++loadSequence
   if (target) page.value = target
   loading.value = true
   loadError.value = ''
   try {
     const { data } = await api.get(config.value.endpoint, { params: params() })
+    if (sequence !== loadSequence) return
     const payload = data?.items ? data : data?.data?.items ? data.data : data
     rows.value = Array.isArray(payload) ? payload : (payload.items || [])
     total.value = Array.isArray(payload) ? rows.value.length : (payload.total ?? rows.value.length)
     loadedOnce.value = true
   } catch (error) {
-    loadError.value = errorText(error)
+    if (sequence === loadSequence) loadError.value = errorText(error)
   } finally {
-    loading.value = false
+    if (sequence === loadSequence) loading.value = false
   }
 }
 
@@ -681,6 +700,7 @@ function resetForm(row?: any) {
 }
 
 function openCreate() {
+  if (!canManage.value) return
   if (config.value.onCreate) {
     config.value.onCreate()
     return
@@ -689,10 +709,12 @@ function openCreate() {
 }
 
 function runExtraCreate() {
+  if (!can(config.value.extraCreatePermission || managePermission.value)) return
   config.value.onExtraCreate?.()
 }
 
 function openRawCreate() {
+  if (!canManage.value) return
   editing.value = false
   activeRow.value = null
   resetForm()
@@ -701,6 +723,8 @@ function openRawCreate() {
 }
 
 function openEdit(row: any) {
+  if (!canManage.value) return
+  if (config.value.onEdit) { config.value.onEdit(row); return }
   editing.value = true
   activeRow.value = row
   resetForm(row)
@@ -709,6 +733,7 @@ function openEdit(row: any) {
 }
 
 async function save() {
+  if (!canManage.value) return
   try {
     await formRef.value?.validate()
   } catch {
@@ -751,6 +776,7 @@ function rowName(row: any) {
 }
 
 async function remove(row: any) {
+  if (!canManage.value) return
   try {
     await ElMessageBox.confirm(
       `确定删除${config.value.itemName}「${rowName(row)}」吗？此操作不可撤销。`,
@@ -766,6 +792,8 @@ async function remove(row: any) {
 }
 
 async function runAction(action: any, row: any) {
+  if (actionDisabled(action, row)) return
+  busyRows.add(row.id)
   try {
     if (action.handler) {
       await action.handler(row, load)
@@ -783,16 +811,23 @@ async function runAction(action: any, row: any) {
       : `${config.value.endpoint}/${row.id}/${action.suffix}`
     const body = typeof action.body === 'function' ? action.body(row) : action.body
     const { data } = await api.request({ url, method: action.method || 'POST', data: body })
+    if (data?.ok === false) { ElMessage.error(data.error || data.message || '操作未成功'); await load(); return }
     ElMessage.success(action.success?.(data) || data?.detail || data?.message || '操作已完成')
     await load()
   } catch {
     /* cancelled or handled by the API interceptor */
+  } finally {
+    busyRows.delete(row.id)
   }
+}
+
+function actionDisabled(action: any, row: any) {
+  return !can(action.permission || managePermission.value) || busyRows.has(row.id) || Boolean(action.disabled?.(row))
 }
 
 async function runSecondary() {
   const action = config.value.secondaryAction
-  if (!action) return
+  if (!action || !can(action.permission || managePermission.value)) return
   try {
     if (action.confirm) await ElMessageBox.confirm(action.confirm, '确认操作')
     const { data } = await api.request({
@@ -800,6 +835,7 @@ async function runSecondary() {
       method: action.method || 'POST',
       data: action.body || {},
     })
+    if (data?.ok === false) { ElMessage.error(data.error || data.message || '操作未成功'); await load(); return }
     ElMessage.success(
       action.success?.(data) || data?.detail || data?.message || '操作已完成',
     )
@@ -813,7 +849,8 @@ function getValue(row: any, key: string) {
   return key.split('.').reduce((value, part) => value?.[part], row)
 }
 
-function display(value: any, col: any) {
+function display(value: any, col: any, row?: any) {
+  if (typeof col.format === 'function' && row) return col.format(value, row)
   if (value === undefined || value === null || value === '') return '—'
   if (col.options) return col.options.find((option: any) => option.value === value)?.label || value
   if (typeof value === 'object') return JSON.stringify(value)
@@ -906,7 +943,9 @@ function isWideField(field: any) {
 
 onMounted(() => load())
 
-defineExpose({ openCreate, load, rows })
+function patchRows(patch: (row: any) => any) { rows.value = rows.value.map(patch) }
+
+defineExpose({ openCreate, load, rows, patchRows })
 </script>
 
 <style scoped>

@@ -15,7 +15,7 @@
         <el-button v-if="realtime.state.value !== 'open'" text type="primary" @click="realtime.reconnect">
           <AppIcon name="refresh" :size="14" class="btn-icon" />重新连接
         </el-button>
-        <el-button type="primary" @click="openSend">
+        <el-button v-if="can('message:send')" type="primary" @click="openSend">
           <AppIcon name="send" :size="14" class="btn-icon" />发送消息
         </el-button>
       </div>
@@ -27,7 +27,7 @@
           <i :class="`socket-led ${realtime.state.value}`"></i>
           <div>
             <b>{{ realtimeLabel }}</b>
-            <small>{{ realtime.state.value === 'open' ? '实时状态推送已连接' : '状态可能延迟，可手动重连' }}</small>
+            <small>{{ lastContentSync ? `消息同步于 ${new Date(lastContentSync).toLocaleTimeString('zh-CN')}` : '消息内容等待首次读取' }} · {{ realtime.state.value === 'open' ? '状态推送在线' : '状态可能延迟' }}</small>
           </div>
         </div>
         <div v-if="realtime.lastMessage.value" class="live-metrics">
@@ -95,9 +95,10 @@
                 <span>CONVERSATIONS</span>
                 <b>会话</b>
               </div>
-              <small>{{ filters.account_id ? accountGroups.length : '—' }}</small>
+              <small>{{ filters.account_id ? historyDirectory.total.value : '—' }}</small>
             </div>
             <div class="panel-body">
+              <el-input v-if="filters.account_id" v-model="historyGroupQuery" clearable placeholder="搜索群别名 / 内部 ID" aria-label="搜索历史会话群聊" @input="searchHistoryGroups" />
               <button
                 type="button"
                 class="message-nav-item"
@@ -141,6 +142,8 @@
                 </span>
                 <AppIcon v-if="filters.qq_group === group.group_number" name="check" :size="12" class="nav-check" />
               </button>
+              <el-button v-if="accountGroups.length < historyDirectory.total.value" text :loading="groupsLoading" @click="historyDirectory.more">加载更多群聊</el-button>
+              <el-button v-if="historyDirectory.error.value" text type="danger" @click="loadGroups(filters.account_id)">{{ historyDirectory.error.value }}，重试</el-button>
             </div>
           </aside>
         </div>
@@ -190,6 +193,8 @@
                 v-model="filters.qq_group"
                 clearable
                 filterable
+                remote
+                :remote-method="searchHistoryGroups"
                 placeholder="全部群聊"
                 class="w-group"
                 aria-label="按群聊筛选"
@@ -203,6 +208,7 @@
                   :label="`${groupTitle(group)} · ${groupNumberText(group)}`"
                   :value="group.group_number"
                 />
+                <template #footer><el-button v-if="accountGroups.length < historyDirectory.total.value" text :loading="groupsLoading" @click.stop="historyDirectory.more">加载更多群聊</el-button></template>
               </el-select>
               <el-select
                 v-model="filters.direction"
@@ -233,6 +239,16 @@
           </div>
 
           <el-alert
+            v-if="unread > 0"
+            class="message-error"
+            type="info"
+            :closable="false"
+            :title="`${unread} 条新消息`"
+          >
+            <template #default><el-button link type="primary" @click="load(1)">查看最新消息</el-button></template>
+          </el-alert>
+
+          <el-alert
             v-if="filters.account_id && !groupsLoading && accountGroups.length === 0"
             class="group-alert"
             type="info"
@@ -260,7 +276,7 @@
             </template>
           </el-alert>
 
-          <div class="thread-body">
+          <div ref="threadBody" class="thread-body">
             <div v-if="viewMode === 'table'" class="table-wrap">
               <el-table
                 v-loading="loading"
@@ -319,7 +335,7 @@
                 <AppIcon name="inbox" :size="27" />
                 <b>暂无消息记录</b>
                 <span>调整账号、群聊或关键词筛选，也可以直接发送一条真实消息。</span>
-                <el-button size="small" type="primary" plain @click="openSend">
+                <el-button v-if="can('message:send')" size="small" type="primary" plain @click="openSend">
                   <AppIcon name="send" :size="12" class="btn-icon" />发送消息
                 </el-button>
               </div>
@@ -384,6 +400,7 @@
               :key="account.id"
               :label="accountOptionLabel(account)"
               :value="account.id"
+              :disabled="!sendableAccount(account)"
             />
           </el-select>
         </el-form-item>
@@ -397,20 +414,29 @@
           <el-select
             v-model="form.target"
             filterable
+            remote
+            :remote-method="searchSendGroups"
             placeholder="先选账号，再选择群聊"
-            :loading="groupsLoading"
+            :loading="sendDirectory.loading.value"
+            :disabled="!form.account_id"
             style="width: 100%"
           >
             <el-option
-              v-for="group in accountGroups"
+              v-for="group in sendDirectory.items.value"
               :key="group.id"
               :label="`${groupTitle(group)} · ${groupNumberText(group)}`"
               :value="String(group.group_number)"
             />
+            <template #footer><el-button v-if="sendDirectory.items.value.length < sendDirectory.total.value" text :loading="sendDirectory.loading.value" @click.stop="sendDirectory.more">加载更多群聊</el-button></template>
           </el-select>
+          <el-button v-if="sendDirectory.error.value" link type="danger" @click="searchSendGroups('')">加载失败，重试</el-button>
         </el-form-item>
-        <el-form-item v-else label="用户 QQ 号" prop="target">
-          <el-input v-model="form.target" inputmode="numeric" placeholder="输入对方 QQ 号" />
+        <el-form-item v-else label="已登记私聊联系人（内部映射 ID）" prop="target">
+          <el-select v-model="form.target" filterable remote :remote-method="searchContacts" :loading="contactsDirectory.loading.value" :disabled="!form.account_id" placeholder="选择已与该机器人私聊的联系人" style="width: 100%">
+            <el-option v-for="contact in contactsDirectory.items.value" :key="contact.id" :label="`${contact.display_name || '私聊联系人'} · 内部映射 ID ${contact.id}`" :value="String(contact.id)" />
+            <template #footer><el-button v-if="contactsDirectory.items.value.length < contactsDirectory.total.value" text @click.stop="contactsDirectory.more">加载更多联系人</el-button></template>
+          </el-select>
+          <el-button v-if="contactsDirectory.error.value" link type="danger" @click="searchContacts('')">加载失败，重试</el-button>
         </el-form-item>
         <el-form-item label="消息内容" prop="content">
           <el-input
@@ -432,7 +458,7 @@
       />
       <template #footer>
         <el-button @click="sendDialog = false">取消</el-button>
-        <el-button type="primary" :loading="sending" @click="send">
+        <el-button type="primary" :loading="sending" :disabled="!canSend" @click="send">
           <AppIcon name="send" :size="14" class="btn-icon" />发送
         </el-button>
       </template>
@@ -441,22 +467,38 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import AppIcon from '../components/AppIcon.vue'
 import { api } from '../api'
 import { groupTitle, groupNumberText } from '../groupDisplay'
 import { useStatusStore } from '../stores/status'
+import { usePermissions } from '../composables/usePermissions'
+import { useAccountDirectory } from '../composables/useAccountDirectory'
 
 const status = useStatusStore()
 const { state: socketState, payload: socketPayload } = storeToRefs(status)
 const realtime = { state: socketState, lastMessage: socketPayload, reconnect: status.reconnect }
+const { can } = usePermissions()
 
 const rows = ref<any[]>([])
 const accounts = ref<any[]>([])
-const accountGroups = ref<any[]>([])
-const groupsLoading = ref(false)
+const groupPage = async (id: number, page: number, keyword: string) => (await api.get('/groups', { params: { account_id: id, page, page_size: 50, keyword: keyword || undefined } })).data
+const historyDirectory = useAccountDirectory<any>(groupPage)
+const sendDirectory = useAccountDirectory<any>(groupPage)
+const contactsDirectory = useAccountDirectory<any>(async (id, page, keyword) => (await api.get('/messages/contacts', { params: { account_id: id, page, page_size: 50, keyword: keyword || undefined } })).data)
+const accountGroups = historyDirectory.items
+const groupsLoading = historyDirectory.loading
+const historyGroupQuery = ref('')
+const threadBody = ref<HTMLElement>()
+const unread = ref(0)
+const lastContentSync = ref<number | null>(null)
+let requestSequence = 0
+let latestMessageId = 0
+let activeScope = ''
+let polling = false
+let pollTimer: ReturnType<typeof setInterval> | undefined
 const loading = ref(false)
 const sending = ref(false)
 const sendDialog = ref(false)
@@ -485,12 +527,13 @@ const rules = {
 }
 
 const realtimeLabel = computed(() => ({
-  open: '实时同步',
+  open: '状态连接在线',
   connecting: '连接中',
   reconnecting: '重连中',
   closed: '连接已断开',
   error: '连接异常',
 } as Record<string, string>)[realtime.state.value] || '等待连接')
+const canSend = computed(() => can('message:send') && Boolean(form.account_id && sendableAccount(accounts.value.find(account => account.id === form.account_id), targetType.value)))
 
 const selectedAccount = computed(() => accounts.value.find(account => account.id === filters.account_id) || null)
 const selectedGroup = computed(() => accountGroups.value.find(group => group.group_number === filters.qq_group) || null)
@@ -539,8 +582,13 @@ function accountMeta(account: any) {
 
 function accountOptionLabel(account: any) {
   const number = account.qq_number ? ` · ${account.qq_number}` : ''
-  const runtime = account.runtime_state === 'online' ? '在线' : '离线'
+  const runtime = accountState(account.id) === 'online' ? '在线' : '离线'
   return `${account.name}${number} · ${runtime}`
+}
+
+function sendableAccount(account: any, type = targetType.value) {
+  const key = type === 'private' ? 'send_private_message' : 'send_group_message'
+  return Boolean(account && accountState(account.id) === 'online' && account.capabilities?.[key])
 }
 
 function liveAccountState(id: number) {
@@ -598,18 +646,13 @@ async function selectGroup(group: number | null) {
 }
 
 async function loadGroups(accountId: number | null) {
-  accountGroups.value = []
-  if (!accountId) return
-  groupsLoading.value = true
-  try {
-    const { data } = await api.get('/groups', { params: { account_id: accountId, page: 1, page_size: 200 } })
-    accountGroups.value = data.items || []
-  } catch {
-    accountGroups.value = []
-  } finally {
-    groupsLoading.value = false
-  }
+  historyGroupQuery.value = ''
+  await historyDirectory.load(accountId)
 }
+
+const searchHistoryGroups = (query: string) => historyDirectory.load(filters.account_id, query)
+const searchSendGroups = (query: string) => sendDirectory.load(form.account_id, query)
+const searchContacts = (query: string) => contactsDirectory.load(form.account_id, query)
 
 async function onAccountChange() {
   filters.qq_group = null
@@ -618,11 +661,20 @@ async function onAccountChange() {
 
 function onSendAccountChange() {
   form.target = ''
-  loadGroups(form.account_id)
+  void sendDirectory.load(form.account_id)
+  void contactsDirectory.load(form.account_id)
+}
+
+function messageParams() {
+  return { keyword: keyword.value || undefined, direction: filters.direction || undefined, account_id: filters.account_id || undefined, qq_group: filters.qq_group || undefined }
 }
 
 async function load(targetPage?: number) {
+  const sequence = ++requestSequence
   if (targetPage) page.value = targetPage
+  unread.value = 0
+  const scope = JSON.stringify(messageParams())
+  if (scope !== activeScope) { latestMessageId = 0; activeScope = scope }
   loading.value = true
   loadError.value = ''
   try {
@@ -630,30 +682,61 @@ async function load(targetPage?: number) {
       params: {
         page: page.value,
         page_size: pageSize.value,
-        keyword: keyword.value || undefined,
-        direction: filters.direction || undefined,
-        account_id: filters.account_id || undefined,
-        qq_group: filters.qq_group || undefined,
+        ...messageParams(),
       },
     })
+    if (sequence !== requestSequence) return
     rows.value = data.items || []
     total.value = data.total || 0
+    latestMessageId = Math.max(latestMessageId, ...rows.value.map(row => row.id), 0)
+    lastContentSync.value = Date.now()
   } catch (error) {
-    loadError.value = errorText(error)
+    if (sequence === requestSequence) loadError.value = errorText(error)
   } finally {
-    loading.value = false
+    if (sequence === requestSequence) loading.value = false
+  }
+}
+
+async function refreshIncremental() {
+  if (polling || loading.value || document.hidden) return
+  polling = true
+  const sequence = requestSequence
+  const cursor = latestMessageId
+  try {
+    const { data } = await api.get('/messages', { params: { ...messageParams(), after_id: cursor, page_size: 200, page: 1 } })
+    if (sequence !== requestSequence) return
+    const incoming = data.items || []
+    if (incoming.length) {
+      latestMessageId = Math.max(cursor, ...incoming.map((item: any) => item.id))
+      unread.value += incoming.length
+      total.value += incoming.length
+      if (page.value === 1) {
+        const top = threadBody.value?.scrollTop || 0
+        const height = threadBody.value?.scrollHeight || 0
+        rows.value = [...new Map([...incoming, ...rows.value].map(item => [item.id, item])).values()].sort((a, b) => b.id - a.id).slice(0, pageSize.value)
+        await nextTick()
+        if (threadBody.value && top > 0) threadBody.value.scrollTop = top + Math.max(0, threadBody.value.scrollHeight - height)
+      }
+    }
+    lastContentSync.value = Date.now()
+  } catch {
+    // Keep visible history and its cursor; the next poll retries the same batch.
+  } finally {
+    polling = false
   }
 }
 
 function openSend() {
+  if (!can('message:send')) return
   sendDialog.value = true
   if (!form.account_id && accounts.value.length === 1) {
     form.account_id = accounts.value[0].id
-    loadGroups(form.account_id)
+    onSendAccountChange()
   }
 }
 
 async function send() {
+  if (!canSend.value || sending.value) return
   await formRef.value?.validate(async (valid: boolean) => {
     if (!valid) return
     sending.value = true
@@ -677,6 +760,8 @@ function formatDate(value: string) {
 }
 
 onMounted(async () => {
+  status.acquire()
+  pollTimer = setInterval(refreshIncremental, 5000)
   try {
     const [accountResponse] = await Promise.all([api.get('/accounts'), load()])
     accounts.value = accountResponse.data
@@ -684,6 +769,14 @@ onMounted(async () => {
     /* 失败信息由全局请求拦截器展示，页面保留重试入口 */
   }
 })
+watch(targetType, () => { form.target = '' })
+watch(socketState, (value, previous) => {
+  if (value === 'open' && previous !== 'open') {
+    void api.get('/accounts').then(response => { accounts.value = response.data })
+    void refreshIncremental()
+  }
+})
+onBeforeUnmount(() => { requestSequence += 1; if (pollTimer) clearInterval(pollTimer) })
 </script>
 
 <style scoped>

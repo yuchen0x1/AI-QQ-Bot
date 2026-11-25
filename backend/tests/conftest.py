@@ -23,8 +23,6 @@ os.environ["REDIS_ENABLED"] = "false"
 # 测试套件会在一个进程里发数百次请求，默认的每分钟限流会误伤后续用例。
 # 这里调到足够大，限流本身的行为由 test_runtime_safety/test_hardening 单独覆盖。
 os.environ["RATE_LIMIT_PER_MINUTE"] = "100000"
-# SSRF 单元测试不解析 DNS；测试通过 MockTransport 注入，避免依赖真实域名。
-os.environ["QBOT_TEST_DISABLE_DNS_SSRF"] = "1"
 
 import httpx  # noqa: E402
 
@@ -37,6 +35,26 @@ from app.core.ratelimit import (  # noqa: E402
     login_limiter,
     two_factor_limiter,
 )
+
+
+@pytest.fixture(autouse=True)
+def _test_dns(monkeypatch):
+    """Mock DNS, not the IP policy; unsafe-answer tests override this resolver."""
+    import ipaddress
+    import socket
+
+    real_resolve = socket.getaddrinfo
+
+    def resolve(host, port, *args, **kwargs):
+        text = host.decode() if isinstance(host, bytes) else str(host)
+        try:
+            ipaddress.ip_address(text)
+        except ValueError:
+            if text.lower().rstrip(".") != "localhost":
+                return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))]
+        return real_resolve(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
 
 
 

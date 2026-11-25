@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import httpx
+import json
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,10 @@ PLUGIN_ID = "metrics-demo"
 def _write_test_plugin(tmp_path) -> str:
     root = tmp_path / PLUGIN_ID
     root.mkdir()
+    (root / "plugin.json").write_text(json.dumps({
+        "id": PLUGIN_ID, "permissions": ["message:reply", "ai:request"],
+        "commands": [{"name": "ping"}, {"name": "boom"}],
+    }), encoding="utf-8")
     (root / "main.py").write_text(
         "async def ping(message):\n"
         "    return 'pong'\n"

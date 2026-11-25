@@ -151,6 +151,7 @@ class Message(Base):
     __tablename__ = "messages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    inbox_id: Mapped[int | None] = mapped_column(Integer, unique=True, index=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True, nullable=False)
     group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"), index=True)
     qq_group: Mapped[int | None] = mapped_column(BigInteger, index=True)
@@ -194,3 +195,22 @@ class QQOfficialIdentity(Base, TimestampMixin):
     openid: Mapped[str] = mapped_column(String(190), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(190))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class QQEventInbox(Base, TimestampMixin):
+    """Durably accepted QQ dispatch; success is recorded only after processing."""
+
+    __tablename__ = "qq_event_inbox"
+    __table_args__ = (UniqueConstraint("account_id", "event_key", name="uq_qq_inbox_account_event"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    claim_id: Mapped[str | None] = mapped_column(String(64))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    side_effect_started: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

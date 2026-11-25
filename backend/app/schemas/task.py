@@ -86,6 +86,9 @@ class TaskRecordOut(ORMModel):
     result: dict[str, Any] | None = None
     error: str | None = None
     retries: int
+    category: str | None = None
+    retries_exhausted: bool = False
+    next_action: str | None = None
 
 
 class PluginOut(ORMModel):

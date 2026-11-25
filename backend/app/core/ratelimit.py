@@ -63,4 +63,4 @@ two_factor_limiter = SlidingWindowLimiter(limit=10, window_seconds=300)
 # 配置了也不生效）。下限收紧到 60，避免误配成 0 直接锁死整个后台。
 api_limiter = SlidingWindowLimiter(limit=max(60, settings.rate_limit_per_minute), window_seconds=60)
 # 兼容旧版根路径回调 /webhook：该路径不在 /api 前缀下，需要独立限流。
-legacy_webhook_limiter = SlidingWindowLimiter(limit=120, window_seconds=60)
+legacy_webhook_limiter = SlidingWindowLimiter(limit=1200, window_seconds=60)

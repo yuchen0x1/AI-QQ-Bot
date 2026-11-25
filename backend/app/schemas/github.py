@@ -154,6 +154,9 @@ class PushRecordOut(ORMModel):
     created_at: datetime
     repo_full_name: str | None = None
     qq_group_display: str | None = None
+    error_category: str | None = None
+    retries_exhausted: bool = False
+    next_action: str | None = None
 
 
 class CheckResult(BaseModel):
