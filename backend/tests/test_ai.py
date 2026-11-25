@@ -99,7 +99,8 @@ async def test_model_connection_and_chat(client: httpx.AsyncClient, admin_header
 
 
 async def test_fallback_model_used_when_primary_fails(client: httpx.AsyncClient, admin_headers: dict):
-    broken = await _create_model(client, admin_headers, name="测试供应商B", model_name="broken-model", is_default=True)
+    broken = await _create_model(client, admin_headers, name="测试供应商B", model_name="broken-model", is_default=True,
+                                 allow_cross_provider_fallback=True)
     healthy = await _create_model(
         client, admin_headers, name="测试供应商C", model_name="backup-model", is_fallback=True, priority=10
     )

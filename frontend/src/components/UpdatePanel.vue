@@ -4,7 +4,7 @@
       <span class="section-icon"><AppIcon name="zap" :size="17" /></span>
       <div>
         <h2>在线更新</h2>
-        <p>从 GitHub Releases 检查新版本，服务器会自动下载、校验、备份、安装并重启服务。</p>
+        <p>从 GitHub Releases 检查新版本。已安装原生升级服务的服务器可自动下载、校验、备份、安装并重启。</p>
       </div>
       <el-tag :type="statusTone" size="small">{{ statusLabel }}</el-tag>
     </div>
@@ -16,24 +16,24 @@
         <small>运行中的控制中心</small>
       </div>
       <div class="version-card latest">
-        <span class="version-label">最新版本</span>
+        <span class="version-label">{{ info.stale ? '最近已知版本' : '最新版本' }}</span>
         <b>v{{ info.latest_version || '—' }}</b>
         <small>{{ info.published_at ? `发布于 ${formatDate(info.published_at)}` : '等待检查结果' }}</small>
       </div>
       <div class="version-card channel">
         <span class="version-label">更新通道</span>
         <b>{{ info.channel || 'stable' }}</b>
-        <small :class="updateAvailable ? 'up' : ''">{{ updateAvailable ? '有新版本可用' : '当前为最新' }}</small>
+        <small :class="updateAvailable ? 'up' : ''">{{ updateAvailable ? '有新版本可用' : info.ok ? '当前未发现更新' : '尚未确认更新状态' }}</small>
       </div>
       <div class="version-card check">
         <span class="version-label">上次检查</span>
         <b>{{ checkedAt || '—' }}</b>
-        <small>{{ checking ? '正在读取发布信息…' : '版本信息来自 GitHub Releases' }}</small>
+        <small>{{ checking ? '正在读取发布信息…' : info.stale ? '上次检查失败，显示最近成功缓存' : info.cached ? '共享缓存，以下方验证时间为准' : '版本信息来自 GitHub Releases' }}</small>
       </div>
     </div>
 
     <div class="update-actions">
-      <el-button v-if="updateAvailable" type="primary" :loading="starting" :disabled="active || job?.status === 'attention' || !info.installable" @click="install">
+      <el-button v-if="canManage && updateAvailable" type="primary" :loading="starting" :disabled="active || job?.status === 'attention' || !info.installable" @click="install">
         <AppIcon name="zap" :size="14" style="margin-right:5px" />{{ active ? '正在升级' : `升级到 v${info.latest_version}` }}
       </el-button>
       <el-button v-if="updateAvailable && !active && !deferred" @click="deferUpdate">稍后提醒</el-button>
@@ -44,8 +44,10 @@
         查看发布页<AppIcon name="external" :size="12" style="margin-left:4px" />
       </el-link>
       <span v-if="info.installer?.reason && updateAvailable && !info.installable" class="subtext">{{ info.installer.reason }}</span>
+      <span v-if="deferred && reminder" class="subtext">已延后提醒至 {{ formatDate(new Date(reminder.snooze_until).toISOString()) }}</span>
     </div>
 
+    <p v-if="info.last_success_at" class="subtext">最近成功验证：{{ formatDate(info.last_success_at) }}<template v-if="info.retry_after_seconds">；将在 {{ info.retry_after_seconds }} 秒后允许重试</template></p>
     <el-alert v-if="info.error" :title="info.error" type="warning" :closable="false" show-icon class="update-alert" />
     <el-alert v-if="updateAvailable && !info.installable && !active" class="update-alert" :title="info.installer?.reason || '此版本的自动升级包尚未就绪，请稍后重试。'" type="info" :closable="false" show-icon />
 
@@ -115,7 +117,9 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppIcon from './AppIcon.vue'
 import { api } from '../api'
+import { readUpdateReminder, snoozeUpdate, subscribeUpdateReminder } from '../updateReminder'
 
+const { canManage = false } = defineProps<{ canManage?: boolean }>()
 const info = ref<any>({})
 const job = ref<any>(null)
 const checking = ref(false)
@@ -124,8 +128,8 @@ const reconnecting = ref(false)
 const checkedAt = ref('')
 const notesExpanded = ref(false)
 const updateAvailable = computed(() => Boolean(info.value.update_available))
-const deferredVersion = ref(localStorage.getItem('qbot_deferred_update'))
-const deferred = computed(() => deferredVersion.value === info.value.latest_version)
+const reminder = ref(readUpdateReminder())
+const deferred = computed(() => reminder.value?.version === info.value.latest_version)
 const active = computed(() => ['queued', 'running'].includes(job.value?.status))
 
 const statusLabel = computed(() => {
@@ -187,12 +191,12 @@ function stageState(index: number) {
 
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
+let releaseReminder: (() => void) | undefined
 const pendingKey = 'qbot_upgrade_pending'
 
-function deferUpdate(event: MouseEvent) {
-  deferredVersion.value = info.value.latest_version
-  localStorage.setItem('qbot_deferred_update', info.value.latest_version)
-  event.target?.dispatchEvent(new Event('qbot-update-deferred', { bubbles: true }))
+function deferUpdate() {
+  snoozeUpdate(String(info.value.latest_version))
+  ElMessage.info('将在 6 小时后再次提醒；更高版本仍会立即提示')
 }
 
 function clearPending() {
@@ -207,9 +211,10 @@ function schedule() {
 async function check(notify = false) {
   checking.value = true
   try {
-    const { data } = await api.get('/system/update')
+    const { data } = await api.get('/system/update', { params: { force: notify } })
+    if (disposed) return
     info.value = data
-    checkedAt.value = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    checkedAt.value = data.checked_at ? formatDate(data.checked_at) : '未成功读取检查时间'
     if (data.installer?.job) job.value = data.installer.job
     if (notify && data.ok) ElMessage.info(data.update_available ? `发现新版本 v${data.latest_version}` : '当前已是最新版本')
   } catch {
@@ -220,6 +225,7 @@ async function check(notify = false) {
 }
 
 async function poll() {
+  if (!canManage) return
   try {
     const response = await fetch('/api/system/update/install', {
       credentials: 'include',
@@ -261,7 +267,7 @@ async function poll() {
 }
 
 async function install() {
-  if (active.value || starting.value || !info.value.installable) return
+  if (!canManage || active.value || starting.value || !info.value.installable) return
   starting.value = true
   const version = String(info.value.latest_version)
   try {
@@ -316,12 +322,14 @@ function formatDate(value: string) {
 }
 
 onMounted(async () => {
+  releaseReminder = subscribeUpdateReminder((value) => { reminder.value = value })
   await check()
   await poll()
 })
 
 onBeforeUnmount(() => {
   disposed = true
+  releaseReminder?.()
   if (timer) clearTimeout(timer)
 })
 </script>

@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import and_, select
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decrypt_secret
+from app.core.config import settings
+from app.models.ai import conversation_scope_key
 from app.models import (
     Account,
     AIMessage,
@@ -21,7 +25,7 @@ from app.models import (
     Group,
     GroupSettings,
 )
-from app.services.ai.providers import AIError, BaseAIProvider, ChatResult, build_provider
+from app.services.ai.providers import BaseAIProvider, ChatResult, build_provider
 
 logger = logging.getLogger("qbot.ai.service")
 
@@ -50,6 +54,32 @@ def provider_to_client(
     )
 
 
+def _parse_model_ids(value: Any) -> set[int]:
+    if not isinstance(value, list):
+        return set()
+    return {int(item) for item in value if isinstance(item, int) and not isinstance(item, bool) and item > 0}
+
+
+async def _allowed_model_ids(db: AsyncSession, account_id: int | None, group_number: int | None) -> set[int] | None:
+    """An absent restriction retains the shared administrative model pool.
+
+    An explicitly empty/invalid list denies all models. Group restrictions can
+    only narrow the account restriction; they cannot broaden it.
+    """
+    if account_id is None:
+        return None
+    account = await db.get(Account, account_id)
+    if not account:
+        return set()
+    features = account.features or {}
+    allowed = _parse_model_ids(features["ai_allowed_model_ids"]) if "ai_allowed_model_ids" in features else None
+    group_rules = features.get("ai_group_model_ids", {})
+    if group_number is not None and isinstance(group_rules, dict) and str(group_number) in group_rules:
+        group_allowed = _parse_model_ids(group_rules[str(group_number)])
+        allowed = group_allowed if allowed is None else allowed & group_allowed
+    return allowed
+
+
 async def resolve_model(
     db: AsyncSession,
     *,
@@ -57,11 +87,16 @@ async def resolve_model(
     account_id: int | None = None,
     group_number: int | None = None,
 ) -> AIModel | None:
-    """优先级：显式指定 > 群配置 > 账号配置 > 全局默认 > 第一个启用模型。"""
-    if model_id:
+    """Explicit routes fail closed; only an unconfigured route uses defaults."""
+    allowed = await _allowed_model_ids(db, account_id, group_number)
+
+    def usable(model: AIModel | None) -> bool:
+        return bool(model and model.enabled and model.provider and model.provider.enabled
+                    and (allowed is None or model.id in allowed))
+
+    if model_id is not None:
         model = await db.get(AIModel, model_id)
-        if model and model.enabled and model.provider and model.provider.enabled:
-            return model
+        return model if usable(model) else None
 
     if account_id and group_number:
         group = await db.scalar(
@@ -71,8 +106,7 @@ async def resolve_model(
             settings = await db.scalar(select(GroupSettings).where(GroupSettings.group_id == group.id))
             if settings and settings.ai_model_id:
                 model = await db.get(AIModel, settings.ai_model_id)
-                if model and model.enabled and model.provider and model.provider.enabled:
-                    return model
+                return model if usable(model) else None
 
     if account_id:
         account = await db.get(Account, account_id)
@@ -83,8 +117,7 @@ async def resolve_model(
                     model = await db.get(AIModel, int(candidate))
                 except (TypeError, ValueError):
                     model = None
-                if model and model.enabled and model.provider and model.provider.enabled:
-                    return model
+                return model if usable(model) else None
 
     default = await db.scalar(
         select(AIModel)
@@ -93,6 +126,7 @@ async def resolve_model(
             AIModel.is_default.is_(True),
             AIModel.enabled.is_(True),
             AIProvider.enabled.is_(True),
+            *([AIModel.id.in_(allowed)] if allowed is not None else []),
         )
         .order_by(AIModel.priority.asc(), AIModel.id.asc())
         .limit(1)
@@ -102,20 +136,41 @@ async def resolve_model(
     return await db.scalar(
         select(AIModel)
         .join(AIProvider, AIModel.provider_id == AIProvider.id)
-        .where(AIModel.enabled.is_(True), AIProvider.enabled.is_(True))
+        .where(AIModel.enabled.is_(True), AIProvider.enabled.is_(True),
+               *([AIModel.id.in_(allowed)] if allowed is not None else []))
         .order_by(AIModel.priority.asc(), AIModel.id.asc())
         .limit(1)
     )
 
 
-async def fallback_models(db: AsyncSession, exclude_id: int | None = None) -> list[AIModel]:
+async def fallback_models(
+    db: AsyncSession,
+    exclude_id: int | None = None,
+    *,
+    primary_model: AIModel | None = None,
+    account_id: int | None = None,
+    group_number: int | None = None,
+    allow_cross_provider: bool | None = None,
+) -> list[AIModel]:
+    primary = primary_model or (await db.get(AIModel, exclude_id) if exclude_id else None)
+    if primary is None:
+        return []
+    cross_provider = bool(primary.allow_cross_provider_fallback) and allow_cross_provider is not False
+    allowed = await _allowed_model_ids(db, account_id, group_number)
+    if account_id is not None:
+        account = await db.get(Account, account_id)
+        if account and (account.features or {}).get("ai_allow_cross_provider_fallback") is False:
+            cross_provider = False
     rows = await db.scalars(
         select(AIModel)
         .join(AIProvider, AIModel.provider_id == AIProvider.id)
         .where(
             AIModel.enabled.is_(True),
             AIProvider.enabled.is_(True),
+            AIModel.is_fallback.is_(True),
             AIModel.id != (exclude_id or -1),
+            *([AIModel.provider_id == primary.provider_id] if not cross_provider else []),
+            *([AIModel.id.in_(allowed)] if allowed is not None else []),
         )
         .order_by(AIModel.is_fallback.desc(), AIModel.priority.asc())
     )
@@ -149,7 +204,7 @@ async def _log_usage(
     await db.commit()
 
 
-async def chat_once(
+async def _chat_once(
     db: AsyncSession,
     model: AIModel,
     messages: list[dict[str, str]],
@@ -160,8 +215,12 @@ async def chat_once(
     allow_fallback: bool = True,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    allow_cross_provider_fallback: bool | None = None,
 ) -> tuple[ChatResult | None, str | None, AIModel]:
     """调用模型，带重试与备用模型降级。返回 (结果, 错误, 实际使用的模型)。"""
+    allowed = await _allowed_model_ids(db, account_id, group_number)
+    if not model.enabled or not model.provider or not model.provider.enabled or (allowed is not None and model.id not in allowed):
+        return None, "模型已停用或不在当前账号/群授权范围", model
     attempts = max(1, model.retries + 1)
     last_error: str | None = None
     for attempt in range(attempts):
@@ -183,7 +242,7 @@ async def chat_once(
                 latency_ms=latency,
             )
             return result, None, model
-        except (AIError, Exception) as exc:  # noqa: BLE001 - 需要捕获所有上游异常并降级
+        except Exception as exc:  # noqa: BLE001 - 上游异常记录后按已授权的链降级
             last_error = f"{type(exc).__name__}: {exc}"
             logger.warning("AI 调用失败 model=%s attempt=%s/%s err=%s", model.model_name, attempt + 1, attempts, last_error)
             model.total_calls += 1
@@ -200,7 +259,10 @@ async def chat_once(
             )
 
     if allow_fallback:
-        for backup in await fallback_models(db, exclude_id=model.id):
+        for backup in await fallback_models(
+            db, exclude_id=model.id, primary_model=model, account_id=account_id,
+            group_number=group_number, allow_cross_provider=allow_cross_provider_fallback,
+        ):
             try:
                 client = provider_to_client(backup)
                 started = time.perf_counter()
@@ -221,6 +283,7 @@ async def chat_once(
                 logger.info("AI 已降级到备用模型 %s", backup.model_name)
                 return result, None, backup
             except Exception as exc:  # noqa: BLE001
+                backup.total_calls += 1
                 backup.total_errors += 1
                 await db.commit()
                 await _log_usage(
@@ -235,11 +298,45 @@ async def chat_once(
     return None, last_error or "AI 调用失败", model
 
 
+async def chat_once(
+    db: AsyncSession,
+    model: AIModel,
+    messages: list[dict[str, str]],
+    *,
+    system: str | None = None,
+    account_id: int | None = None,
+    group_number: int | None = None,
+    user_id: int | None = None,
+    allow_fallback: bool = True,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    allow_cross_provider_fallback: bool | None = None,
+) -> tuple[ChatResult | None, str | None, AIModel]:
+    """One deadline covers the complete retry/fallback chain, including I/O.
+
+    External task cancellation is never translated into an upstream failure,
+    so stopping an account cancels the actual HTTP request as well.
+    """
+    try:
+        async with asyncio.timeout(max(0.01, settings.ai_call_deadline_seconds)):
+            return await _chat_once(
+                db, model, messages, system=system, account_id=account_id,
+                group_number=group_number, allow_fallback=allow_fallback,
+                temperature=temperature, max_tokens=max_tokens,
+                allow_cross_provider_fallback=allow_cross_provider_fallback,
+            )
+    except TimeoutError:
+        await db.rollback()
+        await db.refresh(model)
+        return None, "AI 调用超过整次执行期限，已取消", model
+
+
 async def test_model(db: AsyncSession, model: AIModel) -> dict[str, Any]:
     started = time.perf_counter()
     try:
         client = provider_to_client(model)
-        result = await client.chat([{"role": "user", "content": "请只回复：OK"}], system="你是连通性测试助手。")
+        async with asyncio.timeout(max(0.01, settings.ai_call_deadline_seconds)):
+            result = await client.chat([{"role": "user", "content": "请只回复：OK"}], system="你是连通性测试助手。")
         latency = int((time.perf_counter() - started) * 1000)
         model.last_checked_at = datetime.now(timezone.utc)
         model.last_check_status = "ok"
@@ -271,16 +368,9 @@ async def get_or_create_conversation(
     user_id: int | None = None,
     system_prompt: str | None = None,
 ) -> AIConversation:
-    conversation = await db.scalar(
-        select(AIConversation).where(
-            and_(
-                AIConversation.account_id == account_id,
-                AIConversation.scope == scope,
-                AIConversation.group_number == group_number,
-                AIConversation.user_id == user_id,
-            )
-        )
-    )
+    key = conversation_scope_key(scope, group_number, user_id)
+    query = select(AIConversation).where(AIConversation.account_id == account_id, AIConversation.scope_key == key)
+    conversation = await db.scalar(query)
     if conversation:
         if system_prompt and conversation.system_prompt != system_prompt:
             conversation.system_prompt = system_prompt
@@ -291,12 +381,20 @@ async def get_or_create_conversation(
         scope=scope,
         group_number=group_number,
         user_id=user_id,
+        scope_key=key,
         system_prompt=system_prompt,
         last_active_at=datetime.now(timezone.utc),
     )
-    db.add(conversation)
-    await db.commit()
-    await db.refresh(conversation)
+    try:
+        async with db.begin_nested():
+            db.add(conversation)
+            await db.flush()
+        await db.commit()
+        await db.refresh(conversation)
+    except IntegrityError:
+        conversation = await db.scalar(query)
+        if conversation is None:
+            raise
     return conversation
 
 

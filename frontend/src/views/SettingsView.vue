@@ -107,7 +107,7 @@
         </el-form>
       </section>
 
-      <UpdatePanel v-if="can('system:view')" />
+      <UpdatePanel v-if="can('system:view')" :can-manage="can('system:manage')" />
 
       <section id="security" data-settings-section class="settings-section surface">
         <div class="section-heading">

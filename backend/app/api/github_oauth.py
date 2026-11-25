@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
@@ -10,9 +11,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import client_ip, require
-from app.core.security import decrypt_secret
+from app.core.config import settings
+from app.core.security import decode_access_token, decrypt_secret
 from app.db.session import get_db
-from app.models import GithubRepository, User
+from app.models import AuthSession, GithubRepository, User
 from app.schemas.common import MessageOut
 from app.schemas.github import (
     GithubAccountOut,
@@ -28,24 +30,26 @@ from app.schemas.github import (
 from app.services.github.client import GithubError
 from app.services.github.oauth import (
     MAX_REPOS_PER_PAGE,
+    OAUTH_BROWSER_COOKIE,
+    OAUTH_COOKIE_PATH,
     OAuthError,
     append_query,
     authorize_url,
-    build_state,
+    consume_oauth_state,
+    create_oauth_state,
     delete_token,
     exchange_code,
     fetch_github_user,
     get_oauth_app,
     get_user_token,
     list_user_repos,
-    parse_state,
     profile_summary,
     redirect_uri,
     sanitize_next,
     save_oauth_app,
     save_token,
 )
-from app.services.github.registry import RepositoryExistsError, create_monitored_repo
+from app.services.github.registry import RepositoryExistsError, create_monitored_repo, repo_scope_condition
 from app.services.logs import audit, write_log
 
 logger = logging.getLogger("qbot.github.oauth.api")
@@ -121,8 +125,16 @@ async def oauth_start(
     app = await get_oauth_app(db)
     if not app:
         raise HTTPException(status_code=400, detail="尚未配置 GitHub OAuth App，请先填写 Client ID 与 Client Secret")
-    state = build_state(user, request.query_params.get("next"))
-    response = RedirectResponse(authorize_url(app, state), status_code=302)
+    auth_header = request.headers.get("authorization", "")
+    raw_token = auth_header[7:] if auth_header.lower().startswith("bearer ") else request.cookies.get("qbot_token")
+    session_jti = (decode_access_token(raw_token) or {}).get("jti") if raw_token else None
+    try:
+        state, browser, challenge = await create_oauth_state(db, user, session_jti, request.query_params.get("next"))
+    except OAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    response = RedirectResponse(authorize_url(app, state, code_challenge=challenge), status_code=302)
+    response.set_cookie(OAUTH_BROWSER_COOKIE, browser, httponly=True, secure=settings.is_production,
+                        samesite="lax", max_age=600, path=OAUTH_COOKIE_PATH)
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -139,13 +151,17 @@ async def oauth_callback(
     """GitHub 回调：校验签名 state → 用 code 换 Token → 绑定到发起授权的平台用户。"""
 
     def fail(reason: str) -> RedirectResponse:
-        return RedirectResponse(append_query("/github", github="error", reason=reason[:180]), status_code=302)
+        response = RedirectResponse(append_query("/github", github="error", reason=reason[:180]), status_code=302)
+        response.delete_cookie(OAUTH_BROWSER_COOKIE, path=OAUTH_COOKIE_PATH)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
+    consumed = await consume_oauth_state(db, state, request.cookies.get(OAUTH_BROWSER_COOKIE))
+    if not consumed:
+        return fail("授权状态已失效或签名不匹配，请重新发起绑定")
+    payload, verifier = consumed
     if error:
         return fail(error_description or error)
-    payload = parse_state(state)
-    if not payload:
-        return fail("授权状态已失效或签名不匹配，请重新发起绑定")
     try:
         user_id = int(payload["sub"])
     except (KeyError, TypeError, ValueError):
@@ -160,8 +176,15 @@ async def oauth_callback(
         return fail("GitHub 未返回授权码")
 
     try:
-        token_payload = await exchange_code(app, code)
+        token_payload = await exchange_code(app, code, code_verifier=verifier)
         profile = await fetch_github_user(token_payload["access_token"])
+        # A logout/revocation while GitHub was being contacted must also stop binding.
+        active_session = await db.scalar(select(AuthSession.id).where(
+            AuthSession.id == payload["_auth_session_id"], AuthSession.user_id == user.id,
+            AuthSession.revoked_at.is_(None), AuthSession.expires_at > datetime.now(timezone.utc),
+        ))
+        if not active_session:
+            return fail("发起授权的登录会话已失效，请重新登录后绑定")
         row = await save_token(db, user, token_payload, profile)
     except OAuthError as exc:
         await write_log(db, level="WARNING", category="github", message=f"GitHub 授权失败：{exc}")
@@ -173,9 +196,12 @@ async def oauth_callback(
 
     await audit(db, user_id=user.id, username=user.username, action="bind_github", target=row.login, ip=client_ip(request))
     await write_log(db, level="INFO", category="github", message=f"用户 {user.username} 绑定 GitHub 账号 {row.login}")
-    return RedirectResponse(
+    response = RedirectResponse(
         append_query(sanitize_next(payload.get("next")), github="connected", login=row.login), status_code=302
     )
+    response.delete_cookie(OAUTH_BROWSER_COOKIE, path=OAUTH_COOKIE_PATH)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.post("/disconnect", response_model=MessageOut)
@@ -212,11 +238,13 @@ async def my_repos(
     names = [item["full_name"].lower() for item in items]
     monitored: dict[str, int] = {}
     if names:
-        rows = await db.execute(
-            select(GithubRepository.id, GithubRepository.full_name).where(
+        query = select(GithubRepository.id, GithubRepository.full_name).where(
                 func.lower(GithubRepository.full_name).in_(names)
             )
-        )
+        scope = repo_scope_condition(user)
+        if scope is not None:
+            query = query.where(scope)
+        rows = await db.execute(query)
         monitored = {full_name.lower(): repo_id for repo_id, full_name in rows.all()}
     result = [
         GithubRepoItem(**item, monitored=item["full_name"].lower() in monitored, repo_id=monitored.get(item["full_name"].lower()))

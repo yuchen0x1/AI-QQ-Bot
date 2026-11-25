@@ -26,7 +26,9 @@ def test_outbound_provider_url_rejects_unsafe_targets(url: str) -> None:
 
 
 def test_outbound_provider_url_allows_ollama_loopback() -> None:
-    assert validate_outbound_base_url("http://127.0.0.1:11434/", allow_http=True) == "http://127.0.0.1:11434"
+    assert validate_outbound_base_url(
+        "http://127.0.0.1:11434/", allow_http=True, private_allowlist=["http://127.0.0.1:11434"]
+    ) == "http://127.0.0.1:11434"
 
 
 def test_webhook_hostname_resolution_rejects_private_address(monkeypatch):

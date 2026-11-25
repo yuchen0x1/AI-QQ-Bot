@@ -10,7 +10,7 @@
         <el-button :loading="loading" @click="load()">
           <AppIcon name="refresh" :size="14" class="button-icon" />刷新
         </el-button>
-        <el-button type="primary" @click="syncDialog = true">
+        <el-button v-if="can('group:manage') && accounts.some(account => supports(account.id, 'get_group_list'))" type="primary" @click="syncDialog = true">
           <AppIcon name="users" :size="14" class="button-icon" />同步群列表
         </el-button>
       </div>
@@ -152,8 +152,9 @@
           <template #default="scope">
             <div class="row-actions group-actions">
               <el-button link type="primary" @click="openMembers(scope.row)">成员</el-button>
-              <el-button link type="primary" @click="openSettings(scope.row)">策略</el-button>
+              <el-button v-if="can('group:manage')" link type="primary" @click="openSettings(scope.row)">策略</el-button>
               <el-dropdown
+                v-if="can('group:manage') && groupActions.some(action => supports(scope.row.account_id, action.capability))"
                 trigger="click"
                 @command="(command: string) => groupAction(command, scope.row)"
               >
@@ -163,11 +164,9 @@
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="ban_all">开启全体禁言</el-dropdown-item>
-                    <el-dropdown-item command="unban_all">解除全体禁言</el-dropdown-item>
-                    <el-dropdown-item command="set_announcement">发布群公告</el-dropdown-item>
-                    <el-dropdown-item command="set_group_name">修改群名称</el-dropdown-item>
-                    <el-dropdown-item command="sync" divided>同步群成员</el-dropdown-item>
+                    <template v-for="action in groupActions" :key="action.key">
+                      <el-dropdown-item v-if="supports(scope.row.account_id, action.capability)" :command="action.key">{{ action.label }}</el-dropdown-item>
+                    </template>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -186,7 +185,7 @@
               <el-button v-if="hasGroupFilters" @click="clearGroupFilters">
                 <AppIcon name="filter" :size="14" class="button-icon" />清除筛选
               </el-button>
-              <el-button type="primary" @click="syncDialog = true">
+              <el-button v-if="can('group:manage') && accounts.some(account => supports(account.id, 'get_group_list'))" type="primary" @click="syncDialog = true">
                 <AppIcon name="users" :size="14" class="button-icon" />同步群列表
               </el-button>
             </div>
@@ -244,7 +243,7 @@
           <el-button @click="loadMembers(1)">
             <AppIcon name="search" :size="14" class="button-icon" />查询
           </el-button>
-          <el-button type="primary" :loading="membersLoading" @click="syncMembers">
+          <el-button v-if="can('group:manage') && supports(activeGroup?.account_id, 'get_group_member_list')" type="primary" :loading="membersLoading" @click="syncMembers">
             <AppIcon name="refresh" :size="14" class="button-icon" />同步成员
           </el-button>
         </div>
@@ -308,6 +307,7 @@
           <el-table-column label="操作" width="122" fixed="right">
             <template #default="scope">
               <el-dropdown
+                v-if="can('group:manage')"
                 trigger="click"
                 @command="(command: string) => memberAction(command, scope.row)"
               >
@@ -317,14 +317,11 @@
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="mute">禁言 10 分钟</el-dropdown-item>
-                    <el-dropdown-item command="unmute">解除禁言</el-dropdown-item>
-                    <el-dropdown-item command="set_card">设置群名片</el-dropdown-item>
-                    <el-dropdown-item command="set_admin">设置管理员</el-dropdown-item>
-                    <el-dropdown-item command="unset_admin">取消管理员</el-dropdown-item>
+                    <template v-for="action in memberActions" :key="action.key">
+                      <el-dropdown-item v-if="supports(activeGroup?.account_id, action.capability)" :command="action.key">{{ action.label }}</el-dropdown-item>
+                    </template>
                     <el-dropdown-item command="blacklist">切换黑名单</el-dropdown-item>
                     <el-dropdown-item command="whitelist">切换白名单</el-dropdown-item>
-                    <el-dropdown-item command="kick" divided>踢出成员</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -342,7 +339,7 @@
                 <el-button v-if="memberKeyword.trim()" @click="clearMemberSearch">
                   <AppIcon name="close" :size="14" class="button-icon" />清除搜索
                 </el-button>
-                <el-button type="primary" @click="syncMembers">
+                <el-button v-if="can('group:manage') && supports(activeGroup?.account_id, 'get_group_member_list')" type="primary" @click="syncMembers">
                   <AppIcon name="refresh" :size="14" class="button-icon" />同步成员
                 </el-button>
               </div>
@@ -504,7 +501,7 @@
               :key="account.id"
               :label="`${account.name} · ${account.qq_number || account.app_id || '未登录'} · ${account.runtime_state === 'online' ? '在线' : '离线'}`"
               :value="account.id"
-              :disabled="account.runtime_state !== 'online'"
+              :disabled="!supports(account.id, 'get_group_list')"
             />
           </el-select>
         </el-form-item>
@@ -532,6 +529,8 @@ import { ArrowDown } from '@element-plus/icons-vue'
 import { api } from '../api'
 import { groupTitle, groupNumberText } from '../groupDisplay'
 import AppIcon from '../components/AppIcon.vue'
+import { usePermissions } from '../composables/usePermissions'
+const { can } = usePermissions()
 
 const groups = ref<any[]>([])
 const accounts = ref<any[]>([])
@@ -556,6 +555,25 @@ const accountFilter = ref<number>()
 const syncAccountId = ref<number>()
 const bannedWordsText = ref('')
 const settings = reactive<any>({})
+const groupActions = [
+  { key: 'ban_all', label: '开启全体禁言', capability: 'set_group_whole_ban' },
+  { key: 'unban_all', label: '解除全体禁言', capability: 'set_group_whole_ban' },
+  { key: 'set_announcement', label: '发布群公告', capability: 'set_group_announce' },
+  { key: 'set_group_name', label: '修改群名称', capability: 'set_group_name' },
+  { key: 'sync', label: '同步群成员', capability: 'get_group_member_list' },
+]
+const memberActions = [
+  { key: 'mute', label: '禁言 10 分钟', capability: 'set_group_ban' },
+  { key: 'unmute', label: '解除禁言', capability: 'set_group_ban' },
+  { key: 'set_card', label: '设置群名片', capability: 'set_group_card' },
+  { key: 'set_admin', label: '设置管理员', capability: 'set_group_admin' },
+  { key: 'unset_admin', label: '取消管理员', capability: 'set_group_admin' },
+  { key: 'kick', label: '踢出成员', capability: 'set_group_kick' },
+]
+function supports(accountId: number | undefined, capability: string) {
+  const account = accounts.value.find(account => account.id === accountId)
+  return Boolean(account?.runtime_state === 'online' && account.capabilities?.[capability])
+}
 
 const hasGroupFilters = computed(() => Boolean(keyword.value.trim() || accountFilter.value))
 
@@ -641,6 +659,7 @@ function openSettings(group: any) {
 }
 
 async function saveSettings() {
+  if (!can('group:manage')) return
   let banned: any
   try {
     banned = JSON.parse(bannedWordsText.value || '[]')
@@ -664,7 +683,7 @@ async function saveSettings() {
 }
 
 async function syncMembers() {
-  if (!activeGroup.value) return
+  if (!activeGroup.value || !can('group:manage') || !supports(activeGroup.value.account_id, 'get_group_member_list')) return
   membersLoading.value = true
   try {
     const { data } = await api.post(`/groups/${activeGroup.value.id}/sync`)
@@ -676,6 +695,7 @@ async function syncMembers() {
 }
 
 async function syncGroups() {
+  if (!can('group:manage') || !supports(syncAccountId.value, 'get_group_list')) return
   syncing.value = true
   try {
     const { data } = await api.post(`/groups/sync/${syncAccountId.value}`)
@@ -688,6 +708,7 @@ async function syncGroups() {
 }
 
 async function groupAction(action: string, group: any) {
+  if (!can('group:manage') || !supports(group.account_id, groupActions.find(item => item.key === action)?.capability || '')) return
   if (action === 'sync') {
     activeGroup.value = group
     await syncMembers()
@@ -725,7 +746,9 @@ async function groupAction(action: string, group: any) {
 }
 
 async function memberAction(action: string, member: any) {
+  if (!can('group:manage')) return
   const group = activeGroup.value
+  if (!['blacklist', 'whitelist'].includes(action) && !supports(group?.account_id, memberActions.find(item => item.key === action)?.capability || '')) return
   if (action === 'blacklist' || action === 'whitelist') {
     const body = action === 'blacklist'
       ? { is_blacklisted: !member.is_blacklisted }

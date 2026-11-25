@@ -233,7 +233,7 @@ async def test_check_result_includes_push_counts(client: httpx.AsyncClient, admi
     assert isinstance(body["skipped"], int)
 
 
-async def test_failed_push_then_retry(client: httpx.AsyncClient, admin_headers: dict, mock_account: dict):
+async def test_failed_push_then_retry(client: httpx.AsyncClient, admin_headers: dict, mock_account: dict, db):
     repo = await _add_repo(client, admin_headers)
     await client.put(f"/api/github/repos/{repo['id']}", headers=admin_headers, json={"webhook_secret": "whsec-offline"})
     # The session-scoped test database retains earlier tests' data. Disable their
@@ -252,6 +252,10 @@ async def test_failed_push_then_retry(client: httpx.AsyncClient, admin_headers: 
         json={"name": "离线推送账号", "protocol": "qq_official", "app_id": "999000001", "app_secret": "unit-fixture-secret", "connection_mode": "official_ws", "qq_number": 300003},
     )
     offline_account = created.json()
+    from app.models import Group
+
+    db.add(Group(account_id=offline_account["id"], group_number=900002, name="已登记的离线推送群"))
+    await db.commit()
     rule = await client.post(
         "/api/github/push-rules",
         headers=admin_headers,

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require
 from app.api.pagination import PageParam, PageSizeParam
+from app.core.config import settings as app_settings
 from app.core.security import decrypt_secret, encrypt_secret, mask_secret
 from app.db.session import get_db
 from app.models import (
@@ -197,6 +198,8 @@ async def update_repo(
     repo_id: int, payload: RepoUpdate, db: AsyncSession = Depends(get_db), user: User = Depends(require("github:manage"))
 ):
     repo = await get_repo_or_403(db, repo_id, user)
+    if repo.archived_at is not None:
+        raise HTTPException(status_code=409, detail="所有者已删除的仓库仅保留历史，请删除后明确重新接入")
     data = payload.model_dump(exclude_unset=True)
     token = data.pop("token", None)
     secret = data.pop("webhook_secret", None)
@@ -341,6 +344,16 @@ async def _visible_repo_ids(db: AsyncSession, user: User) -> set[int] | None:
     return set(await db.scalars(select(GithubRepository.id).where(scope)))
 
 
+async def _registered_push_target(db: AsyncSession, account_id: int, qq_group: int) -> Account:
+    account = await db.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="QQ 账号不存在")
+    group = await db.scalar(select(Group.id).where(Group.account_id == account_id, Group.group_number == qq_group))
+    if group is None:
+        raise HTTPException(status_code=422, detail="请选择该账号已登记的群聊（内部映射 ID）")
+    return account
+
+
 @router.get("/push-rules", response_model=list[PushRuleOut])
 async def list_rules(db: AsyncSession = Depends(get_db), user: User = Depends(require("push:view"))):
     query = select(PushRule)
@@ -356,9 +369,7 @@ async def create_rule(
     payload: PushRuleCreate, db: AsyncSession = Depends(get_db), user: User = Depends(require("push:manage"))
 ):
     repo = await get_repo_or_403(db, payload.repository_id, user)
-    account = await db.get(Account, payload.account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="QQ 账号不存在")
+    account = await _registered_push_target(db, payload.account_id, payload.qq_group)
     rule = PushRule(**payload.model_dump())
     db.add(rule)
     await db.commit()
@@ -378,10 +389,10 @@ async def update_rule(
         raise HTTPException(status_code=404, detail="推送规则不存在")
     await get_repo_or_403(db, rule.repository_id, user)
     data = payload.model_dump(exclude_unset=True)
-    if "account_id" in data:
-        account = await db.get(Account, data["account_id"])
-        if not account:
-            raise HTTPException(status_code=404, detail="QQ 账号不存在")
+    if any(value is None for key, value in data.items() if key != "template"):
+        raise HTTPException(status_code=422, detail="推送规则字段不能设为 null")
+    if {"account_id", "qq_group"}.intersection(data) or data.get("enabled") is True:
+        await _registered_push_target(db, data.get("account_id", rule.account_id), data.get("qq_group", rule.qq_group))
     for field, value in data.items():
         setattr(rule, field, value)
     await db.commit()
@@ -407,6 +418,36 @@ async def delete_rule(rule_id: int, db: AsyncSession = Depends(get_db), user: Us
 # ---------------------------------------------------------------------------
 # 推送记录
 # ---------------------------------------------------------------------------
+def push_record_guidance(record: PushRecord, max_retries: int) -> dict:
+    if record.status == "success":
+        return {"error_category": None, "retries_exhausted": False, "next_action": None}
+    if record.status == "cancelled":
+        return {"error_category": "cancelled", "retries_exhausted": False,
+                "next_action": "旧通知已取消且不会自动重试；检查仓库、规则和目标群后按需重新推送"}
+    exhausted = record.status in {"failed", "pending", "retrying"} and record.retries >= max_retries
+    text = (record.error or "").lower()
+    if any(word in text for word in ("429", "限流", "频率", "rate limit", "too many requests")):
+        category, action = "rate_limit", "等待平台限流恢复并检查发送频率"
+    elif any(word in text for word in ("timeout", "timed out", "超时")):
+        category, action = "timeout", "检查平台响应与出站网络，并确认平台是否已接收消息"
+    elif any(word in text for word in ("离线", "不在线", "offline", "连接", "connect", "network", "网络")):
+        category, action = "connection", "先恢复指定机器人账号或网络连接；账号离线不会消耗自动重试次数"
+    elif any(word in text for word in ("401", "403", "权限", "permission", "forbidden", "token", "认证", "凭据", "白名单")):
+        category, action = "authorization", "检查机器人凭据、平台权限和 IP 白名单"
+    elif any(word in text for word in ("参数", "缺少", "不存在", "unsupported", "不支持", "目标")):
+        category, action = "configuration", "检查推送规则、已登记目标群和账号能力"
+    elif text or record.status == "failed":
+        category, action = "execution", "查看错误详情并核对平台实际投递结果"
+    else:
+        category, action = None, "等待发送完成；长时间未完成时检查账号、推送规则和任务运行状态"
+    if exhausted:
+        prefix = "自动重试已关闭" if max_retries <= 0 else "自动重试次数已耗尽"
+        action = f"{prefix}；{action}，确认平台投递结果后再手动重推"
+    elif record.status == "failed":
+        action += "；符合条件时可继续自动重试，手动重推前先确认平台投递结果"
+    return {"error_category": category, "retries_exhausted": exhausted, "next_action": action}
+
+
 @router.get("/push-records", response_model=Page[PushRecordOut])
 async def list_push_records(
     page: PageParam = 1,
@@ -440,6 +481,8 @@ async def list_push_records(
         data = PushRecordOut.model_validate(record)
         data.repo_full_name = repos.get(record.repository_id)
         data.qq_group_display = labels.get((record.account_id, record.qq_group), {}).get("number")
+        for key, value in push_record_guidance(record, app_settings.push_max_retries).items():
+            setattr(data, key, value)
         items.append(data)
     return Page(items=items, total=total, page=page, page_size=page_size)
 

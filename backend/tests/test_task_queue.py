@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import os
+import time
+from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -33,6 +37,41 @@ class _Pipeline:
 class _FakeRedis:
     def __init__(self) -> None:
         self.lists: dict[str, list[str]] = {}
+        self.strings: dict[str, str] = {}
+
+    async def eval(self, script: str, count: int, *arguments):
+        keys, args = arguments[:count], arguments[count:]
+        if "qbot:claim" in script:
+            source = self.lists.setdefault(keys[0], [])
+            if not source:
+                return None
+            raw = source.pop()
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict):
+                payload.setdefault("_job_id", args[0])
+                if keys[2] + payload["_job_id"] in self.strings:
+                    return None
+                payload.update(_claim_owner=args[1], _claim_id=args[2], _claimed_at=float(args[3]), _lease_until=float(args[4]))
+                raw = json.dumps(payload)
+            self.lists.setdefault(keys[1], []).insert(0, raw)
+            return raw
+        source = self.lists.setdefault(keys[0], [])
+        if "qbot:replay" in script and keys[2] in self.strings:
+            return 0
+        if "qbot:renew" in script and json.loads(args[0])["_lease_until"] <= time.time():
+            return 0
+        if args[0] not in source:
+            return 0
+        source.remove(args[0])
+        if "qbot:ack" in script:
+            self.strings[keys[1]] = args[1]
+        else:
+            destination = keys[0] if "qbot:renew" in script else keys[1]
+            self.lists.setdefault(destination, []).insert(0, args[1])
+        return 1
 
     async def lpush(self, key: str, value: str) -> int:
         self.lists.setdefault(key, []).insert(0, value)
@@ -117,4 +156,68 @@ async def test_requeue_stale_recovers_crashed_worker_job(queue: RedisTaskQueue) 
     recovered = json.loads(queue._client.lists[queue.queue_name][0])
     assert recovered["task_id"] == 9
     assert recovered["_queue_attempts"] == 1
+
+
+async def test_two_reclaimers_do_not_duplicate_the_same_job(queue):
+    await queue.enqueue(12)
+    item = await queue.dequeue(timeout=0)
+    expired = {key: value for key, value in item.items() if key != "_queue_raw"}
+    expired["_lease_until"] = time.time() - 1
+    queue._client.lists[queue.processing_queue_name] = [queue._serialize(expired)]
+    outcomes = await asyncio.gather(queue.requeue_stale(), queue.requeue_stale())
+    assert sum(result["requeued"] for result in outcomes) == 1
+    assert len(queue._client.lists[queue.queue_name]) == 1
+    assert await queue.ack(item) == 0
+
+
+async def test_old_enqueued_job_gets_a_fresh_execution_lease(queue):
+    raw = json.dumps({"task_id": 13, "_job_id": "old-ready", "_queued_at": "2000-01-01T00:00:00+00:00"})
+    queue._client.lists[queue.queue_name] = [raw]
+    item = await queue.dequeue(timeout=0)
+    assert item["_claim_owner"] == queue.owner
+    assert await queue.requeue_stale(visibility_timeout=1) == {"requeued": 0, "dead_lettered": 0}
+    assert await queue.renew(item)
+    assert await queue.ack(item) == 1
+
+
+async def test_successful_job_cannot_be_manually_replayed(queue):
+    await queue.enqueue(14)
+    item = await queue.dequeue(timeout=0)
+    assert await queue.ack(item) == 1
+    raw = item["_queue_raw"]
+    queue._client.lists[queue.dead_letter_queue_name] = [raw]
+    assert not await queue.replay_dead(raw, actor="operator", reason="reviewed")
+    assert not queue._client.lists[queue.queue_name]
+
+
+async def test_real_redis_claim_recovery_and_connection_reconnect():
+    url = os.environ.get("TEST_REDIS_URL")
+    if not url:
+        pytest.skip("TEST_REDIS_URL not configured")
+    name = "qbot:test:" + uuid4().hex
+    first, second = RedisTaskQueue(url, name), RedisTaskQueue(url, name)
+    client = await first._get_client()
+    try:
+        await first.enqueue(21)
+        claimed = await asyncio.gather(first.dequeue(timeout=0), second.dequeue(timeout=0))
+        assert len([item for item in claimed if item]) == 1
+        item = next(item for item in claimed if item)
+        expired = {key: value for key, value in item.items() if key != "_queue_raw"}
+        expired["_lease_until"] = time.time() - 1
+        await client.lset(first.processing_queue_name, 0, first._serialize(expired))
+        outcomes = await asyncio.gather(first.requeue_stale(), second.requeue_stale())
+        assert sum(result["requeued"] for result in outcomes) == 1
+        assert await client.llen(first.queue_name) == 1
+        assert await first.ack(item) == 0
+        recovered = await first.dequeue(timeout=0)
+        assert recovered and await first.renew(recovered)
+        await client.connection_pool.disconnect()
+        assert await first.ack(recovered) == 1
+        assert await first.ping()
+    finally:
+        keys = [key async for key in client.scan_iter(match=name + "*")]
+        if keys:
+            await client.delete(*keys)
+        await first.close()
+        await second.close()
 

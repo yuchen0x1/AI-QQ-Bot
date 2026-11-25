@@ -2,7 +2,7 @@
 
 设计要点：
 * **Client Secret 不出服务端**，只用于 code 换 token；数据库中的副本用 Fernet 加密。
-* **state 用短期 JWT 签名**，不落库即可跨进程/多副本校验，附带 next 跳转目标并做开放重定向过滤。
+* **state 签名并持久化一次性消费**，绑定发起登录会话、浏览器随机 Cookie 和 PKCE。
 * **Token 只在服务端加密存储**，接口只回显登录名/头像/授权范围，绝不返回明文。
 """
 
@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 import secrets
+import base64
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -17,14 +19,14 @@ from urllib.parse import parse_qs, urlencode
 
 import httpx
 import jwt
-from sqlalchemy import select
+from sqlalchemy import delete, exists, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.http import new_client
 from app.core.security import decrypt_secret, encrypt_secret
-from app.models import GithubRepository, SystemSetting, User, UserGithubToken
+from app.models import AuthSession, GithubOAuthState, GithubRepository, SystemSetting, User, UserGithubToken
 
 logger = logging.getLogger("qbot.github.oauth")
 
@@ -35,6 +37,8 @@ STATE_TTL_MINUTES = 10
 SETTING_KEY = "github_oauth"
 DEFAULT_NEXT = "/github"
 MAX_REPOS_PER_PAGE = 100
+OAUTH_BROWSER_COOKIE = "qbot_github_oauth"
+OAUTH_COOKIE_PATH = f"{settings.api_prefix}/github/oauth"
 
 
 class OAuthError(RuntimeError):
@@ -140,7 +144,7 @@ def build_state(user: User, next_path: str | None = None) -> str:
         "sub": str(user.id),
         "purpose": STATE_PURPOSE,
         "next": sanitize_next(next_path),
-        "nonce": secrets.token_urlsafe(9),
+        "nonce": secrets.token_urlsafe(32),
         "iat": now,
         "exp": now + timedelta(minutes=STATE_TTL_MINUTES),
     }
@@ -159,7 +163,73 @@ def parse_state(state: str | None) -> dict[str, Any] | None:
     return payload
 
 
-def authorize_url(app: OAuthApp, state: str, redirect: str | None = None) -> str:
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def pkce_challenge(verifier: str) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
+
+
+async def create_oauth_state(
+    db: AsyncSession, user: User, session_jti: str | None, next_path: str | None,
+) -> tuple[str, str, str]:
+    now = datetime.now(timezone.utc)
+    session = await db.scalar(select(AuthSession).where(
+        AuthSession.jti == session_jti, AuthSession.user_id == user.id,
+        AuthSession.revoked_at.is_(None), AuthSession.expires_at > now,
+    ))
+    if not session:
+        raise OAuthError("请重新登录后发起 GitHub 绑定")
+    state = build_state(user, next_path)
+    browser = secrets.token_urlsafe(32)
+    verifier = secrets.token_urlsafe(64)
+    await db.execute(delete(GithubOAuthState).where(GithubOAuthState.expires_at < now - timedelta(hours=1)))
+    db.add(GithubOAuthState(
+        state_hash=_digest(state), browser_hash=_digest(browser), user_id=user.id,
+        auth_session_id=session.id, code_verifier_enc=encrypt_secret(verifier) or "",
+        expires_at=now + timedelta(minutes=STATE_TTL_MINUTES),
+    ))
+    await db.commit()
+    return state, browser, pkce_challenge(verifier)
+
+
+async def consume_oauth_state(db: AsyncSession, state: str | None, browser: str | None) -> tuple[dict, str] | None:
+    payload = parse_state(state)
+    if not payload or not browser or not state:
+        return None
+    try:
+        user_id = int(payload["sub"])
+    except (ValueError, TypeError, KeyError):
+        return None
+    now = datetime.now(timezone.utc)
+    row = await db.scalar(select(GithubOAuthState).where(
+        GithubOAuthState.state_hash == _digest(state),
+        GithubOAuthState.browser_hash == _digest(browser),
+        GithubOAuthState.user_id == user_id,
+    ))
+    if not row:
+        return None
+    # SQL predicate and rowcount make concurrent callbacks mutually exclusive.
+    claim = await db.execute(update(GithubOAuthState).where(
+        GithubOAuthState.id == row.id, GithubOAuthState.consumed_at.is_(None),
+        GithubOAuthState.expires_at > now,
+        exists(select(AuthSession.id).where(
+            AuthSession.id == GithubOAuthState.auth_session_id,
+            AuthSession.user_id == GithubOAuthState.user_id,
+            AuthSession.revoked_at.is_(None), AuthSession.expires_at > now,
+        )),
+        exists(select(User.id).where(User.id == GithubOAuthState.user_id, User.is_active.is_(True))),
+    ).values(consumed_at=now).execution_options(synchronize_session=False))
+    await db.commit()
+    if claim.rowcount != 1:
+        return None
+    verifier = decrypt_secret(row.code_verifier_enc)
+    payload["_auth_session_id"] = row.auth_session_id
+    return (payload, verifier) if verifier else None
+
+
+def authorize_url(app: OAuthApp, state: str, redirect: str | None = None, *, code_challenge: str | None = None) -> str:
     params = {
         "client_id": app.client_id,
         "redirect_uri": redirect or redirect_uri(),
@@ -167,6 +237,8 @@ def authorize_url(app: OAuthApp, state: str, redirect: str | None = None) -> str
         "state": state,
         "allow_signup": "false",
     }
+    if code_challenge:
+        params.update(code_challenge=code_challenge, code_challenge_method="S256")
     return f"{AUTHORIZE_URL}?{urlencode(params)}"
 
 
@@ -198,13 +270,15 @@ def _api_headers(token: str, accept: str = "application/vnd.github+json") -> dic
     }
 
 
-async def exchange_code(app: OAuthApp, code: str, redirect: str | None = None) -> dict[str, Any]:
+async def exchange_code(app: OAuthApp, code: str, redirect: str | None = None, *, code_verifier: str | None = None) -> dict[str, Any]:
     payload = {
         "client_id": app.client_id,
         "client_secret": app.client_secret,
         "code": code,
         "redirect_uri": redirect or redirect_uri(),
     }
+    if code_verifier:
+        payload["code_verifier"] = code_verifier
     try:
         async with new_client(timeout=20.0) as client:
             response = await client.post(TOKEN_URL, data=payload, headers={"Accept": "application/json"})
@@ -333,6 +407,8 @@ async def delete_token(db: AsyncSession, user_id: int) -> bool:
 
 async def resolve_repo_token(db: AsyncSession, repo: GithubRepository) -> str | None:
     """仓库 API 调用凭据优先级：独立 PAT > 归属用户绑定的 OAuth Token > 全局环境变量。"""
+    if repo.archived_at is not None:
+        return None
     explicit = decrypt_secret(repo.token_enc)
     if explicit:
         return explicit

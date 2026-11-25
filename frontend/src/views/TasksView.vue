@@ -43,6 +43,7 @@
       </div>
     </template>
   </ResourceView>
+  <TaskEditor v-model="editorOpen" :task="editingTask" @saved="taskView?.load()" />
 
   <el-dialog
     v-model="recordsDialog"
@@ -130,6 +131,12 @@
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
+          <el-table-column label="处理建议" min-width="240">
+            <template #default="{ row }">
+              <el-tag v-if="row.category" size="small" type="warning">{{ row.category }}{{ row.retries_exhausted ? ' · 重试耗尽' : '' }}</el-tag>
+              <div>{{ row.next_action || '—' }}</div>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
 
@@ -161,6 +168,7 @@ import { computed, onMounted, ref } from 'vue'
 import { Clock } from '@element-plus/icons-vue'
 import AppIcon from '../components/AppIcon.vue'
 import ResourceView from '../components/ResourceView.vue'
+import TaskEditor from '../components/TaskEditor.vue'
 import { api } from '../api'
 
 interface TaskRecord {
@@ -180,6 +188,8 @@ const recordsLoading = ref(false)
 const recordsPage = ref(1)
 const recordsTotal = ref(0)
 const recordsError = ref('')
+const editorOpen = ref(false)
+const editingTask = ref<any>()
 
 const taskRows = computed<any[]>(() => {
   const exposed = taskView.value as { rows?: unknown } | undefined
@@ -285,6 +295,8 @@ function openHistory() {
 onMounted(loadRecords)
 
 const config = {
+  onCreate: () => { editingTask.value = undefined; editorOpen.value = true },
+  onEdit: (task: any) => { editingTask.value = task; editorOpen.value = true },
   kicker: 'AUTOMATION',
   title: '自动化任务',
   description: '持久化定时任务、运行记录、失败重试与立即执行',
@@ -295,6 +307,7 @@ const config = {
   createLabel: '创建任务',
   rawCreateLabel: '创建',
   extraCreateLabel: '执行历史',
+  extraCreatePermission: 'task:view',
   extraCreateIcon: Clock,
   onExtraCreate: openHistory,
   columns: [
@@ -305,7 +318,7 @@ const config = {
       width: 135,
       options: [
         { value: 'github_check', label: '单仓库检查' },
-        { value: 'github_check_all', label: '全部仓库检查' },
+        { value: 'github_check_all', label: '授权仓库检查' },
         { value: 'group_announcement', label: '定时群公告' },
         { value: 'group_message', label: '定时群消息' },
         { value: 'online_check', label: '在线状态检查' },
@@ -350,7 +363,7 @@ const config = {
       required: true,
       options: [
         { value: 'github_check', label: '检查指定仓库' },
-        { value: 'github_check_all', label: '检查所有仓库' },
+        { value: 'github_check_all', label: '检查当前用户授权仓库' },
         { value: 'group_announcement', label: '定时群公告' },
         { value: 'group_message', label: '定时群消息' },
         { value: 'online_check', label: '机器人在线检查' },
@@ -397,10 +410,11 @@ const config = {
   ],
   actions: [
     {
-      label: '立即运行',
+      label: '试运行',
       suffix: 'run',
       method: 'POST',
       type: 'success',
+      confirm: '试运行「{name}」将真实执行任务并可能发送消息或产生外部副作用，是否继续？',
       success: (data: any) => data.message || '任务执行完成',
     },
     {

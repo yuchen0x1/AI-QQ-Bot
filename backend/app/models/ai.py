@@ -22,6 +22,17 @@ from app.models.base import Base, TimestampMixin, utcnow
 PROVIDER_KINDS = ("openai", "deepseek", "qwen", "moonshot", "gemini", "anthropic", "ollama", "custom")
 
 
+def conversation_scope_key(scope: str, group_number: int | None, user_id: int | None) -> str:
+    group = str(group_number) if group_number is not None else "-"
+    user = str(user_id) if user_id is not None else "-"
+    return f"{scope}:{group}:{user}"
+
+
+def _default_scope_key(context) -> str:
+    values = context.get_current_parameters()
+    return conversation_scope_key(values.get("scope", "group"), values.get("group_number"), values.get("user_id"))
+
+
 class AIProvider(Base, TimestampMixin):
     __tablename__ = "ai_providers"
 
@@ -52,6 +63,7 @@ class AIModel(Base, TimestampMixin):
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_fallback: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_cross_provider_fallback: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     total_calls: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_errors: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -68,6 +80,7 @@ class AIConversation(Base, TimestampMixin):
     __tablename__ = "ai_conversations"
     __table_args__ = (
         UniqueConstraint("account_id", "scope", "group_number", "user_id", name="uq_conversation_scope"),
+        UniqueConstraint("account_id", "scope_key", name="uq_conversation_scope_key"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -75,6 +88,7 @@ class AIConversation(Base, TimestampMixin):
     scope: Mapped[str] = mapped_column(String(16), default="group", nullable=False)  # group/private
     group_number: Mapped[int | None] = mapped_column(Integer)
     user_id: Mapped[int | None] = mapped_column(Integer)
+    scope_key: Mapped[str] = mapped_column(String(96), default=_default_scope_key, nullable=False)
     model_id: Mapped[int | None] = mapped_column(ForeignKey("ai_models.id", ondelete="SET NULL"))
     system_prompt: Mapped[str | None] = mapped_column(Text)
     message_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

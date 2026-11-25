@@ -2,9 +2,17 @@
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
-if [[ ! -f .env ]]; then echo "缺少 .env；请先 cp .env.example .env 并配置强密码。" >&2; exit 1; fi
+ENV_FILE="${QBOT_ENV_FILE:-.env}"
+if [[ ! -f "$ENV_FILE" ]]; then echo "缺少环境配置；请先配置 .env 或 QBOT_ENV_FILE。" >&2; exit 1; fi
+export QBOT_ENV_FILE="$ENV_FILE"
+umask 077
 mkdir -p backups
-# Credentials stay inside postgres; pg_dump stream is compressed before leaving its container.
-docker compose exec -T postgres sh -ec 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --clean --if-exists | gzip -c' > "backups/qbot-$(date +%Y%m%d-%H%M%S).sql.gz"
-python3 -c 'from pathlib import Path; p=Path("backups"); fs=sorted(p.glob("qbot-*.sql.gz"),key=lambda f:f.stat().st_mtime,reverse=True); [f.unlink() for f in fs[14:]]'
-printf '备份完成：%s\n' "$(ls -t backups/qbot-*.sql.gz | head -1)"
+temporary="$(mktemp backups/.qbot-backup-XXXXXXXX.sql.gz)"
+trap 'rm -f -- "$temporary"' EXIT
+target="backups/qbot-$(date +%Y%m%d-%H%M%S)-${temporary##*.qbot-backup-}"
+# Keep both processes in this pipefail shell; POSIX sh in postgres does not have pipefail.
+docker compose --env-file "$ENV_FILE" exec -T postgres sh -ec \
+  'exec pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --clean --if-exists' \
+  | gzip -c > "$temporary"
+python3 scripts/backup_storage.py finalize "$temporary" "$target" --keep 14
+printf '备份完成：%s\n' "$target"

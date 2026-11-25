@@ -41,13 +41,19 @@ async def test_health_check_task(client: httpx.AsyncClient, admin_headers: dict)
     assert toggled.json()["enabled"] is False
 
 
-async def test_task_failure_returns_error(client: httpx.AsyncClient, admin_headers: dict):
+async def test_task_failure_returns_error(client: httpx.AsyncClient, admin_headers: dict, monkeypatch):
+    from app.services.scheduler import TASK_HANDLERS
+
+    async def fail(_payload):
+        raise RuntimeError("external service timeout")
+
+    monkeypatch.setitem(TASK_HANDLERS, "health_check", fail)
     created = await client.post(
         "/api/tasks",
         headers=admin_headers,
         json={
-            "name": "缺少参数的群消息任务",
-            "task_type": "group_message",
+            "name": "外部服务失败任务",
+            "task_type": "health_check",
             "schedule_kind": "interval",
             "interval_seconds": 600,
             "payload": {},
@@ -61,7 +67,25 @@ async def test_task_failure_returns_error(client: httpx.AsyncClient, admin_heade
     assert run.status_code == 200
     body = run.json()
     assert body["ok"] is False
-    assert "account_id" in (body["error"] or "")
+    assert "timeout" in (body["error"] or "")
+    assert body["category"] == "timeout"
+    assert body["retries_exhausted"] is True
+
+
+async def test_task_parameters_and_preview_are_validated_before_persisting(client, admin_headers):
+    invalid = await client.post("/api/tasks", headers=admin_headers, json={
+        "name": "缺少参数的群消息任务", "task_type": "group_message", "schedule_kind": "interval",
+        "interval_seconds": 600, "payload": {}, "enabled": False,
+    })
+    assert invalid.status_code == 422
+    preview = await client.post("/api/tasks/preview", headers=admin_headers, json={
+        "name": "调度预览", "task_type": "health_check", "schedule_kind": "cron", "cron_expr": "0 9 * * *",
+    })
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["valid"] is True
+    assert preview.json()["timezone"]
+    assert len(preview.json()["next_runs"]) == 3
+    assert len(set(preview.json()["next_runs"])) == 3
 
 
 async def test_cron_validation(client: httpx.AsyncClient, admin_headers: dict):

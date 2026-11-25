@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -65,6 +67,39 @@ class BotEngine:
         self._ai_limits: dict[int, tuple[int, asyncio.Semaphore]] = {}
         # (account_id, scope, target) -> 会话锁，保证同一群/私聊内的消息按到达顺序处理。
         self._session_locks: dict[tuple[int, str, int], asyncio.Lock] = {}
+        self._ai_pending: dict[int, dict[tuple[str, int], deque[tuple]]] = {}
+        self._ai_order: dict[int, deque[tuple[str, int]]] = {}
+        self._ai_runners: dict[int, asyncio.Task] = {}
+        self._ai_account_tasks: dict[int, set[asyncio.Task]] = {}
+        self._ai_wake: dict[int, asyncio.Event] = {}
+
+    async def cancel_account(self, account_db_id: int) -> None:
+        pending = self._ai_pending.pop(account_db_id, {})
+        self._ai_order.pop(account_db_id, None)
+        self._ai_wake.pop(account_db_id, None)
+        for queue in pending.values():
+            for entry in queue:
+                await self._finish_inbox(entry[1], entry[2], error="account stopped before AI processing")
+        tasks = list(self._ai_account_tasks.pop(account_db_id, set()))
+        runner = self._ai_runners.pop(account_db_id, None)
+        if runner:
+            tasks.append(runner)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _finish_inbox(self, adapter: QQAdapter, event: AdapterEvent, *, error: str | None = None) -> None:
+        inbox_id = int(event.raw.get("_inbox_id") or 0)
+        token = event.raw.get("_inbox_claim")
+        if inbox_id and token:
+            from app.services import qq_inbox
+
+            with contextlib.suppress(Exception):
+                await qq_inbox.finish(inbox_id, token, error=error)
+            underlying = getattr(adapter, "adapter", adapter)
+            if hasattr(underlying, "release_inbox"):
+                underlying.release_inbox(inbox_id)
 
     # ------------------------------------------------------------------
     def _ai_semaphore(self, account_db_id: int) -> asyncio.Semaphore:
@@ -98,14 +133,108 @@ class BotEngine:
         text: str,
         *,
         forced: bool = False,
-    ) -> None:
-        """把 AI 回复排到后台；调用方立即返回，事件流继续消费下一条消息。"""
-        task = asyncio.create_task(
-            self._ai_reply_task(account_db_id, adapter, event, text, forced=forced),
-            name=f"qbot-ai-{account_db_id}",
-        )
-        self._ai_tasks.add(task)
-        task.add_done_callback(self._ai_tasks.discard)
+    ) -> bool:
+        """Admit a bounded request before creating any task; rotate scopes fairly."""
+        scope = "private" if event.message_type == "private" else "group"
+        target = int(event.user_id or 0) if scope == "private" else int(event.group_id or 0)
+        key = (scope, target)
+        queues = self._ai_pending.setdefault(account_db_id, {})
+        total = sum(len(q) for groups in self._ai_pending.values() for q in groups.values())
+        account_total = sum(len(q) for q in queues.values())
+        per_scope = max(1, int(getattr(app_settings, "ai_queue_per_scope", 8)))
+        limit = max(1, int(getattr(app_settings, "ai_queue_max_pending", 64)))
+        user_pending = sum(1 for q in queues.values() for entry in q if entry[2].user_id == event.user_id)
+        user_limit = max(1, per_scope // 2)
+        if total >= limit * 4 or account_total >= limit or len(queues.get(key, [])) >= per_scope or user_pending >= user_limit:
+            return False
+        if key not in queues:
+            queues[key] = deque()
+            self._ai_order.setdefault(account_db_id, deque()).append(key)
+        queues[key].append((time.monotonic(), adapter, event, text, forced))
+        self._ai_wake.setdefault(account_db_id, asyncio.Event()).set()
+        event.raw["_inbox_deferred"] = True
+        runner = self._ai_runners.get(account_db_id)
+        if runner is None or runner.done():
+            runner = asyncio.create_task(self._run_ai_queue(account_db_id), name=f"qbot-ai-queue-{account_db_id}")
+            self._ai_runners[account_db_id] = runner
+            self._ai_tasks.add(runner)
+            runner.add_done_callback(self._ai_tasks.discard)
+        return True
+
+    async def _run_ai_queue(self, account_db_id: int) -> None:
+        active: dict[asyncio.Task, tuple[str, int]] = {}
+        self._ai_account_tasks[account_db_id] = set()
+        try:
+            while True:
+                queues = self._ai_pending.get(account_db_id, {})
+                order = self._ai_order.get(account_db_id, deque())
+                wait_limit = max(0.01, min(float(getattr(app_settings, "ai_queue_wait_seconds", 30)),
+                                           float(getattr(app_settings, "ai_call_deadline_seconds", 120))))
+                for key, queue in list(queues.items()):
+                    while queue and time.monotonic() - queue[0][0] >= wait_limit:
+                        _, stale_adapter, stale_event, _, _ = queue.popleft()
+                        await self._finish_inbox(stale_adapter, stale_event, error="AI queue deadline exceeded")
+                    if not queue:
+                        queues.pop(key, None)
+                        with contextlib.suppress(ValueError):
+                            order.remove(key)
+                concurrency = max(1, int(app_settings.ai_max_concurrency))
+                searched = 0
+                while order and len(active) < concurrency and searched < len(order):
+                    key = order.popleft()
+                    if key in active.values():
+                        order.append(key)
+                        searched += 1
+                        continue
+                    queue = queues[key]
+                    queued_at, adapter, event, text, forced = queue.popleft()
+                    if queue:
+                        order.append(key)
+                    else:
+                        queues.pop(key)
+                    if time.monotonic() - queued_at >= wait_limit:
+                        await self._finish_inbox(adapter, event, error="AI queue deadline exceeded")
+                        searched = 0
+                        continue
+                    task = asyncio.create_task(self._ai_reply_task(
+                        account_db_id, adapter, event, text, forced=forced,
+                        deadline=queued_at + float(getattr(app_settings, "ai_call_deadline_seconds", 120)),
+                    ), name=f"qbot-ai-{account_db_id}")
+                    active[task] = key
+                    self._ai_account_tasks[account_db_id].add(task)
+                    self._ai_tasks.add(task)
+                    task.add_done_callback(self._ai_tasks.discard)
+                    searched = 0
+                if not active:
+                    if not order:
+                        return
+                    continue
+                wake = self._ai_wake.setdefault(account_db_id, asyncio.Event())
+                wake.clear()
+                waiter = asyncio.create_task(wake.wait())
+                next_expiry = min((queue[0][0] + wait_limit for queue in queues.values() if queue), default=None)
+                try:
+                    done, _ = await asyncio.wait(
+                        [*active, waiter], return_when=asyncio.FIRST_COMPLETED,
+                        timeout=max(0.001, next_expiry - time.monotonic()) if next_expiry is not None else None,
+                    )
+                finally:
+                    waiter.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await waiter
+                for task in done:
+                    if task is waiter:
+                        continue
+                    active.pop(task, None)
+                    self._ai_account_tasks.get(account_db_id, set()).discard(task)
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        task.result()
+        finally:
+            for task in active:
+                task.cancel()
+            if active:
+                await asyncio.gather(*active, return_exceptions=True)
+            self._ai_account_tasks.pop(account_db_id, None)
 
     async def _ai_reply_task(
         self,
@@ -115,12 +244,12 @@ class BotEngine:
         text: str,
         *,
         forced: bool = False,
+        deadline: float | None = None,
     ) -> None:
-        lock = self._session_lock(account_db_id, event)
-        semaphore = self._ai_semaphore(account_db_id)
+        error: str | None = None
         try:
-            # 先锁会话再占并发，避免同一会话的多条消息白占并发名额。
-            async with lock, semaphore:
+            remaining = deadline - time.monotonic() if deadline is not None else float(getattr(app_settings, "ai_call_deadline_seconds", 120))
+            async with asyncio.timeout(max(0.01, remaining)):
                 async with SessionLocal() as db:
                     account = await db.get(Account, account_db_id)
                     if not account or not account.enabled:
@@ -149,8 +278,10 @@ class BotEngine:
                         forced=forced,
                     )
         except asyncio.CancelledError:
+            error = "AI processing cancelled"
             raise
         except Exception as exc:  # noqa: BLE001 - 后台任务不能静默失败
+            error = f"{type(exc).__name__}: {exc}"
             logger.exception("AI 后台回复失败 account=%s: %s", account_db_id, exc)
             try:
                 async with SessionLocal() as db:
@@ -163,6 +294,8 @@ class BotEngine:
                     )
             except Exception:  # noqa: BLE001
                 logger.warning("写入 AI 异常日志失败", exc_info=True)
+        finally:
+            await self._finish_inbox(adapter, event, error=error)
 
     # ------------------------------------------------------------------
     async def handle_event(self, db: AsyncSession, account_db_id: int, adapter: QQAdapter, event: AdapterEvent) -> None:
@@ -250,7 +383,8 @@ class BotEngine:
         return group, settings
 
     async def _upsert_member(
-        self, db: AsyncSession, group: Group, event: AdapterEvent, *, count_message: bool = True
+        self, db: AsyncSession, group: Group, event: AdapterEvent, *, count_message: bool = True,
+        commit: bool = True,
     ) -> GroupMember | None:
         uid = int(event.user_id or 0)
         if not uid:
@@ -267,7 +401,8 @@ class BotEngine:
         member.last_active_at = datetime.now(timezone.utc)
         if count_message:
             member.message_count = (member.message_count or 0) + 1
-        await db.commit()
+        if commit:
+            await db.commit()
         return member
 
     # ------------------------------------------------------------------
@@ -276,9 +411,10 @@ class BotEngine:
         group: Group | None = None
         settings: GroupSettings | None = None
         member: GroupMember | None = None
+        inbox_id = int(event.raw.get("_inbox_id") or 0) or None
+        record = await db.scalar(select(Message).where(Message.inbox_id == inbox_id)) if inbox_id else None
         if event.message_type == "group" and event.group_id:
             group, settings = await self._ensure_group(db, account, event.group_id, event)
-            member = await self._upsert_member(db, group, event)
 
             from app.services.github.automation import bind_from_message
 
@@ -290,20 +426,22 @@ class BotEngine:
 
                 scheduler_service.request_activity_sync()
                 return
+            member = await self._upsert_member(db, group, event, count_message=record is None, commit=False)
 
-        record = Message(
-            account_id=account.id,
-            group_id=group.id if group else None,
-            qq_group=event.group_id,
-            message_id=event.message_id,
-            direction="in",
-            message_type=event.message_type or "group",
-            sender_id=event.user_id,
-            sender_name=event.sender_name,
-            content=text,
-            raw=event.raw,
-        )
-        db.add(record)
+        if record is None:
+            record = Message(
+                account_id=account.id, inbox_id=inbox_id,
+                group_id=group.id if group else None,
+                qq_group=event.group_id,
+                message_id=event.message_id,
+                direction="in",
+                message_type=event.message_type or "group",
+                sender_id=event.user_id,
+                sender_name=event.sender_name,
+                content=text,
+                raw=event.raw,
+            )
+            db.add(record)
         await db.commit()
         await db.refresh(record)
 
@@ -342,14 +480,18 @@ class BotEngine:
             await self.send_text(db, account, adapter, command_reply, group_number=event.group_id, user_id=event.user_id)
             return
 
-        # 3) AI：交给后台任务，避免慢模型阻塞同账号后续消息
-        should_ai = handled_by_ai or await self._should_reply_with_ai(event, settings)
-        if should_ai:
-            self.schedule_ai_reply(account.id, adapter, event, text, forced=handled_by_ai)
+        # Explicit /ai wins; plugin commands and hooks run before implicit AI.
+        if handled_by_ai:
+            accepted = self.schedule_ai_reply(account.id, adapter, event, text, forced=True)
+            if not accepted:
+                await self.send_text(db, account, adapter, "AI 请求排队已满，请稍后再试。", group_number=event.group_id, user_id=event.user_id)
             return
 
-        # 4) 插件钩子
-        await self._run_plugin_hooks(db, account, adapter, event, text)
+        if await self._run_plugin_hooks(db, account, adapter, event, self._clean_text(event, text)):
+            return
+        if await self._should_reply_with_ai(event, settings):
+            if not self.schedule_ai_reply(account.id, adapter, event, text):
+                await self.send_text(db, account, adapter, "AI 请求排队已满，请稍后再试。", group_number=event.group_id, user_id=event.user_id)
 
     # ------------------------------------------------------------------
     async def _should_reply_with_ai(self, event: AdapterEvent, settings: GroupSettings | None) -> bool:
@@ -433,7 +575,8 @@ class BotEngine:
 
         started = time.perf_counter()
         result, error, used_model = await ai_service.chat_once(
-            db, model, messages, system=system_prompt, account_id=account.id, group_number=event.group_id
+            db, model, messages, system=system_prompt, account_id=account.id, group_number=event.group_id,
+            user_id=event.user_id,
         )
         latency = int((time.perf_counter() - started) * 1000)
         if not result or not (result.content or "").strip():
@@ -601,6 +744,11 @@ class BotEngine:
     ) -> dict[str, Any] | None:
         if not text:
             return None
+        from app.services.account_manager import account_manager
+
+        underlying = getattr(adapter, "adapter", adapter)
+        if account_manager.adapter(account.id) is not underlying:
+            raise AdapterError("账号连接已停止或已更换，取消旧连接的发送")
         payload = truncate(text, MAX_REPLY_CHARS)
         try:
             if group_number:
@@ -650,12 +798,12 @@ class BotEngine:
     # ------------------------------------------------------------------
     async def _run_plugin_hooks(
         self, db: AsyncSession, account: Account, adapter: QQAdapter, event: AdapterEvent, text: str
-    ) -> None:
+    ) -> bool:
         from app.services.plugins import plugin_manager
 
         if not plugin_manager.loaded:
-            return
-        replies = await plugin_manager.dispatch_message(
+            return False
+        result = await plugin_manager.dispatch(
             db,
             account_id=account.id,
             group_number=event.group_id,
@@ -663,8 +811,9 @@ class BotEngine:
             text=text,
             sender_name=event.sender_name,
         )
-        for reply in replies:
+        for reply in result.replies:
             await self.send_text(db, account, adapter, reply, group_number=event.group_id, user_id=event.user_id)
+        return result.handled
 
 
 engine = BotEngine()

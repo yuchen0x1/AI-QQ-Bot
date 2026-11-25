@@ -80,6 +80,15 @@ def _pg_parts(url: str) -> dict[str, str]:
     }
 
 
+def _verify_gzip(path: Path) -> None:
+    size = 0
+    with gzip.open(path, "rb") as source:
+        while chunk := source.read(1024 * 1024):
+            size += len(chunk)
+    if not size:
+        raise RuntimeError("pg_dump 未返回任何数据库内容")
+
+
 async def backup_database() -> Path:
     """备份数据库：SQLite 在线备份，PostgreSQL 调用 pg_dump。"""
     url = settings.database_url
@@ -96,7 +105,8 @@ async def backup_database() -> Path:
     pg = _pg_parts(url)
     if not shutil.which("pg_dump"):
         raise RuntimeError("未找到 pg_dump，无法备份 PostgreSQL（请安装 postgresql-client）")
-    target = target_dir / f"qbot-{_timestamp()}.sql.gz"
+    target = target_dir / f"qbot-{_timestamp()}-{uuid4().hex[:8]}.sql.gz"
+    temporary = target.with_name(f".{target.name}.tmp")
     env = {"PGPASSWORD": pg["password"]}
     cmd = [
         "pg_dump",
@@ -112,26 +122,39 @@ async def backup_database() -> Path:
         "--clean",
         "--if-exists",
     ]
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**__import__("os").environ, **env}
-    )
-    assert process.stdout is not None
+    process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                 env={**os.environ, **env})
     stderr_task = asyncio.create_task(process.stderr.read()) if process.stderr is not None else None
-    with gzip.open(target, "wb") as fh:
-        while chunk := await process.stdout.read(1024 * 1024):
-            fh.write(chunk)
-    stderr = await stderr_task if stderr_task is not None else b""
-    await process.wait()
-    if process.returncode != 0:
-        target.unlink(missing_ok=True)
-        raise RuntimeError(f"pg_dump 失败：{stderr.decode('utf-8', 'ignore')[:500]}")
+    try:
+        assert process.stdout is not None
+        with gzip.open(temporary, "wb") as fh:
+            while chunk := await process.stdout.read(1024 * 1024):
+                fh.write(chunk)
+        stderr = await stderr_task if stderr_task is not None else b""
+        await process.wait()
+        if process.returncode != 0:
+            # stderr can contain database connection details; keep them out of API errors.
+            logger.warning("pg_dump failed with exit status %s (%s stderr bytes)", process.returncode, len(stderr))
+            raise RuntimeError(f"pg_dump 失败（退出码 {process.returncode}）")
+        await asyncio.to_thread(_verify_gzip, temporary)
+        os.replace(temporary, target)
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        if stderr_task is not None and not stderr_task.done():
+            stderr_task.cancel()
+            await asyncio.gather(stderr_task, return_exceptions=True)
+        temporary.unlink(missing_ok=True)
     logger.info("PostgreSQL 备份完成：%s", target)
     return target
 
 
 def list_backups(limit: int = 50) -> list[dict[str, object]]:
     folder = _backup_dir()
-    files = sorted(folder.glob("qbot-*"), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+    files = sorted((p for p in folder.glob("qbot-*") if p.is_file() and not p.is_symlink()
+                    and (p.name.endswith(".db") or p.name.endswith(".sql.gz"))),
+                   key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
     return [
         {
             "name": f.name,
@@ -147,10 +170,15 @@ def list_backups(limit: int = 50) -> list[dict[str, object]]:
 
 
 def prune_backups(keep: int = 14) -> int:
+    if keep < 1:
+        raise ValueError("至少保留一份备份")
     folder = _backup_dir()
-    files = sorted(folder.glob("qbot-*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted((p for p in folder.glob("qbot-*") if p.is_file() and not p.is_symlink()
+                    and (p.name.endswith(".db") or p.name.endswith(".sql.gz"))),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
     removed = 0
     for stale in files[keep:]:
         stale.unlink(missing_ok=True)
+        stale.with_name(stale.name + ".sha256").unlink(missing_ok=True)
         removed += 1
     return removed

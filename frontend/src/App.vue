@@ -216,6 +216,7 @@ import { useStatusStore } from './stores/status'
 import { localeSetting, setLocaleSetting, t } from './i18n'
 import { themeName, toggleTheme } from './theme'
 import { version as appVersion } from '../package.json'
+import { readUpdateReminder, shouldRemindUpdate, subscribeUpdateReminder } from './updateReminder'
 
 const route = useRoute()
 const router = useRouter()
@@ -473,23 +474,33 @@ async function loadProfile() {
 
 let updateTimer: ReturnType<typeof setTimeout> | undefined
 let updateSession = 0
+let updateCandidate: { version: string; available: boolean; interval: number } | undefined
+let releaseUpdateReminder: (() => void) | undefined
 let notifyTimer: ReturnType<typeof setInterval> | undefined
+function refreshUpdateReminder() {
+  const candidate = updateCandidate
+  updateAvailable.value = route.path !== '/login' && Boolean(candidate && shouldRemindUpdate(
+    candidate.version, candidate.available, candidate.interval, readUpdateReminder(),
+  ))
+}
 function stopUpdateChecks() {
   updateSession++
   clearTimeout(updateTimer)
+  updateCandidate = undefined
   updateAvailable.value = false
 }
 async function checkForUpdateSilently() {
   if (route.path === '/login' || !userPermissions.value.some((p) => p === '*' || p === 'system:view')) return
+  clearTimeout(updateTimer)
   const session = ++updateSession
   let interval = 5
   try {
     const { data } = await api.get('/system/update')
     if (session !== updateSession) return
-    if (data.ok) interval = Number(data.check_interval_minutes) || 0
+    if (Number.isFinite(Number(data.check_interval_minutes))) interval = Math.max(0, Number(data.check_interval_minutes))
     latestVersion.value = String(data?.latest_version || '')
-    updateAvailable.value = interval > 0 && Boolean(data?.update_available)
-      && localStorage.getItem('qbot_deferred_update') !== latestVersion.value
+    updateCandidate = { version: latestVersion.value, available: Boolean(data?.update_available), interval }
+    refreshUpdateReminder()
   } catch { /* offline */ }
   if (session === updateSession && interval > 0) {
     updateTimer = setTimeout(checkForUpdateSilently, Math.min(interval * 60_000, 2_147_483_647))
@@ -571,6 +582,7 @@ onMounted(async () => {
   updateViewport()
   mobileQuery.addEventListener('change', updateViewport)
   window.addEventListener('keydown', onGlobalKey)
+  releaseUpdateReminder = subscribeUpdateReminder(refreshUpdateReminder)
   api.get('/system/config').then(({ data }) => {
     if (data?.panel_title) {
       panelTitle.value = String(data.panel_title)
@@ -588,6 +600,7 @@ onBeforeUnmount(() => {
   mobileQuery?.removeEventListener('change', updateViewport)
   window.removeEventListener('keydown', onGlobalKey)
   if (notifyTimer) clearInterval(notifyTimer)
+  releaseUpdateReminder?.()
   stopStatus()
   stopUpdateChecks()
 })

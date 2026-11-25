@@ -87,7 +87,7 @@ services:
       - app_backups:/backups
       - ./backend/plugins:/app/plugins:ro
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os; os.kill(1, 0)\""]
+      test: ["CMD", "python", "-m", "app.worker", "--healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3

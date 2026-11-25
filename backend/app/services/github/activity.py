@@ -197,8 +197,11 @@ async def ingest_activity(db: AsyncSession, repo: GithubRepository, event_type: 
 
 async def dispatch_activity(db: AsyncSession, repo: GithubRepository, event: GithubEvent) -> list[PushRecord]:
     from app.services.account_manager import account_manager
+    from app.services.github.access import scoped_push_query
 
-    rule_rows = list(await db.scalars(select(PushRule).where(PushRule.repository_id == repo.id, PushRule.enabled.is_(True))))
+    if repo.archived_at is not None:
+        return []
+    rule_rows = list(await db.scalars(scoped_push_query(repo.id)))
     # 判据快照成普通元组：并发回滚会让会话内所有 ORM 实例过期，之后再读
     # rule.event_types 会触发异步上下文里的懒加载并抛出 MissingGreenlet（接口 500）。
     snapshot = [(row.id, tuple(row.event_types or ["release"])) for row in rule_rows]

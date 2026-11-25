@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.qq_official import QQOfficialAdapter
 from app.core.config import settings
+from app.api.deps import client_ip
+from app.core.webhook_limits import allow_webhook, signature_failure_sample
 from app.core.security import decrypt_secret
 from app.db.session import get_db
 from app.models import Account
@@ -115,6 +117,11 @@ async def _resolve_account(
 
 
 async def handle_callback(request: Request, app_id: str | None, db: AsyncSession) -> JSONResponse:
+    allowed, retry_after = allow_webhook(client_ip(request), "qq")
+    if not allowed:
+        response = _error(429, "Webhook 请求过于频繁")
+        response.headers["Retry-After"] = str(retry_after)
+        return response
     try:
         body = await _read_body_limited(request)
     except ValueError as exc:
@@ -158,14 +165,11 @@ async def handle_callback(request: Request, app_id: str | None, db: AsyncSession
         if not plain_token or not event_ts:
             return _error(400, "回调验证请求缺少 plain_token / event_ts")
         signature = sign_callback_validation(secret, event_ts, plain_token)
-        await write_log(
-            db,
-            level="INFO",
-            category="qq",
-            message=f"QQ 官方机器人 {account.name} 通过 Webhook 回调地址验证",
-            account_id=account.id,
-            context=await _trace_context(request, app_id=resolved_app_id),
-        )
+        # op=13 is unauthenticated too; sample successful address probes to bound database writes.
+        if signature_failure_sample(f"qq-validation:{account.id}") is not None:
+            await write_log(db, level="INFO", category="qq", account_id=account.id,
+                            message=f"QQ 官方机器人 {account.name} 通过 Webhook 回调地址验证",
+                            context=await _trace_context(request, app_id=resolved_app_id))
         return JSONResponse({"plain_token": plain_token, "signature": signature})
 
     if op != OP_DISPATCH:
@@ -180,15 +184,13 @@ async def handle_callback(request: Request, app_id: str | None, db: AsyncSession
         max_age_seconds=settings.qqbot_webhook_max_age_seconds,
     )
     if not ok:
-        logger.warning("QQ Webhook 验签失败 app=%s: %s", resolved_app_id, reason)
-        await write_log(
-            db,
-            level="WARNING",
-            category="qq",
-            message=f"QQ Webhook 验签失败：{reason}",
-            account_id=account.id,
-            context=await _trace_context(request, app_id=resolved_app_id),
-        )
+        sample = signature_failure_sample(f"qq:{account.id}")
+        if sample is not None:
+            logger.warning("QQ Webhook 验签失败 app=%s count=%s: %s", resolved_app_id, sample, reason)
+            await write_log(db, level="WARNING", category="qq", account_id=account.id,
+                            message=f"QQ Webhook 验签失败：{reason}（聚合 {sample} 次）",
+                            context=await _trace_context(request, app_id=resolved_app_id,
+                                                         signature_failures=sample, sample_seconds=60))
         return _error(401, f"Webhook 验签失败：{reason}")
 
     adapter = account_manager.adapter(account.id)

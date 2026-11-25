@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import encrypt_secret
@@ -30,13 +30,15 @@ def repo_scope_condition(user: User) -> Any | None:
     """普通用户只能看到自己添加的仓库与历史全局仓库；超级管理员不受限。"""
     if is_super_admin(user):
         return None
-    return or_(GithubRepository.owner_user_id == user.id, GithubRepository.owner_user_id.is_(None))
+    return and_(GithubRepository.archived_at.is_(None), or_(
+        GithubRepository.owner_user_id == user.id, GithubRepository.owner_user_id.is_(None)
+    ))
 
 
 def can_access_repo(user: User, repo: GithubRepository) -> bool:
     if is_super_admin(user):
         return True
-    return repo.owner_user_id is None or repo.owner_user_id == user.id
+    return repo.archived_at is None and (repo.owner_user_id is None or repo.owner_user_id == user.id)
 
 
 async def create_monitored_repo(

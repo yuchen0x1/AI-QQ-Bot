@@ -241,6 +241,10 @@ async def remove_archived_repository(db: AsyncSession, repo: GithubRepository, *
 async def check_repository(
     db: AsyncSession, repo: GithubRepository, *, notify: bool = True, client: GithubClient | None = None
 ) -> dict[str, Any]:
+    if repo.archived_at is not None:
+        return {"repository_id": repo.id, "repository": repo.full_name, "ok": False,
+                "new_releases": 0, "pushed": 0, "skipped": 1, "releases": [],
+                "message": "仓库所有者已删除，仓库已归档；请管理员明确重新接入"}
     client = client or build_repository_provider(repo.provider, await resolve_repo_token(db, repo))
     result: dict[str, Any] = {
         "repository_id": repo.id,
@@ -278,12 +282,17 @@ async def check_repository(
         result["releases"] = [r.tag_name for r in new_releases]
         if notify and new_releases:
             from app.models import PushRecord
+            from app.services.github.access import notification_scope
 
+            scope = notification_scope.get()
+            push_query = select(PushRecord).where(
+                PushRecord.repository_id == repo.id,
+                PushRecord.release_id.in_([release.id for release in new_releases]),
+            )
+            if scope is not None:
+                push_query = push_query.where(PushRecord.account_id == scope[0], PushRecord.qq_group == scope[1])
             push_rows = await db.scalars(
-                select(PushRecord).where(
-                    PushRecord.repository_id == repo.id,
-                    PushRecord.release_id.in_([release.id for release in new_releases]),
-                )
+                push_query
             )
             records = list(push_rows)
             result["pushed"] = sum(1 for row in records if row.status == "success")
@@ -321,7 +330,7 @@ async def check_repository(
 
 
 async def check_all_repositories(db: AsyncSession, *, only_enabled: bool = True) -> list[dict[str, Any]]:
-    query = select(GithubRepository)
+    query = select(GithubRepository).where(GithubRepository.archived_at.is_(None))
     if only_enabled:
         query = query.where(GithubRepository.monitor_enabled.is_(True))
     repos = list(await db.scalars(query.order_by(GithubRepository.id)))

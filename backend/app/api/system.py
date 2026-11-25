@@ -115,16 +115,17 @@ async def info(_: User = Depends(require("system:view"))):
 
 
 @router.get("/update")
-async def update_info(channel: str | None = None, _: User = Depends(require("system:view"))):
+async def update_info(channel: str | None = None, force: bool = False, _: User = Depends(require("system:view"))):
     """检查 GitHub Releases；网络失败只返回诊断，不阻断管理台。"""
     from app.services.update_checker import check_for_update
 
     from app.services.update_installer import installer_state
-    result = await check_for_update(channel)
+    result = await check_for_update(channel, force=force)
     result["installer"] = await installer_state()
     native = f"qbot-ai-{result.get('latest_version')}-native.tar.gz"
     assets = {asset["name"] for asset in result["assets"] if asset.get("sha256")}
-    result["installable"] = bool(result["installer"]["available"] and result.get("update_available")
+    result["installable"] = bool(result["installer"]["available"] and result.get("ok") and not result.get("stale")
+        and result.get("update_available")
         and not result.get("prerelease") and {native, "provenance.sigstore.json"} <= assets)
     return result
 

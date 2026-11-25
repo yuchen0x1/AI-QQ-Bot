@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     # 单个账号同时在途的 AI 请求上限：防止慢模型拖垮事件循环，也避免触发上游限流。
     # 同一群/同一私聊会话仍按顺序处理，只有不同会话之间才并发。
     ai_max_concurrency: int = 4
+    ai_queue_max_pending: int = 64
+    ai_queue_per_scope: int = 8
+    ai_queue_wait_seconds: float = 30.0
+    ai_call_deadline_seconds: float = 120.0
+    # Local model exceptions are complete base URLs, never CIDRs or wildcards.
+    ollama_allowed_base_urls: Annotated[list[str], NoDecode] = []
 
     # ---------- 调度 / 通知 ----------
     scheduler_enabled: bool = True
@@ -119,8 +125,9 @@ class Settings(BaseSettings):
     backup_dir: str = str(BASE_DIR / "backups")
     data_dir: str = str(BASE_DIR / "data")
     plugin_dir: str = str(BACKEND_DIR / "plugins")
+    plugin_extensions_dir: str = ""
 
-    @field_validator("cors_origins", "trusted_proxies", mode="before")
+    @field_validator("cors_origins", "trusted_proxies", "ollama_allowed_base_urls", mode="before")
     @classmethod
     def _parse_origins(cls, value: str | list[str]) -> list[str]:
         return _split(value)

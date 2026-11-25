@@ -106,8 +106,8 @@ HTTP 端口仅绑定到 `HTTP_BIND`。若设置 `0.0.0.0`，必须先配置 TLS�
 
 ## 备份与恢复
 
-- 手动备份：`./backup.sh`，备份存于 `backups/`，脚本默认保留最近 14 份。
-- 手动恢复：`./restore.sh backups/qbot-YYYYMMDD-HHMMSS.sql.gz`，会要求输入 `RESTORE` 确认；恢复前建议另做一份当前数据库备份。
+- 手动备份：`bash backup.sh`，备份存于 `backups/`，导出与压缩分别检查、完整性校验和原子改名完成后才保留最近 14 份，并写入 SHA-256 文件。
+- 手动恢复：`bash restore.sh backups/qbot-....sql.gz`，先校验并在隔离库演练，输入 `RESTORE` 后停止 backend/worker、自动保存恢复前快照，再以单事务恢复；失败保持维护停止状态。仅演练可运行 `bash restore.sh --verify-only <备份文件>`。恢复前需停止其它外部写入实例。
 - Compose 数据持久化卷：PostgreSQL `postgres_data`、Redis `redis_data`、应用数据 `app_data`、备份 `app_backups`。定期将备份复制到独立且访问受控的存储。
 - 生产验证恢复流程时请使用隔离环境；备份文件可能含个人信息与凭据（含加密后的 AppSecret），应限制访问。
 

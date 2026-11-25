@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require
 from app.api.pagination import PageParam, PageSizeParam
+from app.core.config import settings
 from app.core.security import decrypt_secret, encrypt_secret, mask_secret
 from app.core.ssrf import OutboundURLError, validate_outbound_base_url
 from app.db.session import get_db
@@ -34,6 +35,14 @@ from app.services.ai.providers import PROVIDER_PRESETS, build_provider
 from app.services.logs import audit
 
 router = APIRouter(prefix="/ai", tags=["AI中心"])
+
+
+def _validate_provider_url(value: str, kind: str) -> str:
+    return validate_outbound_base_url(
+        value,
+        allow_http=kind == "ollama",
+        private_allowlist=settings.ollama_allowed_base_urls if kind == "ollama" else (),
+    )
 
 
 def serialize_provider(provider: AIProvider, model_count: int = 0) -> ProviderOut:
@@ -86,7 +95,7 @@ async def create_provider(
     if exists:
         raise HTTPException(status_code=409, detail="同名供应商已存在")
     try:
-        base_url = validate_outbound_base_url(payload.base_url, allow_http=payload.kind == "ollama")
+        base_url = _validate_provider_url(payload.base_url, payload.kind)
     except OutboundURLError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     provider = AIProvider(
@@ -116,15 +125,17 @@ async def update_provider(
     if not provider:
         raise HTTPException(status_code=404, detail="供应商不存在")
     data = payload.model_dump(exclude_unset=True)
+    if "base_url" in data or "kind" in data:
+        try:
+            data["base_url"] = _validate_provider_url(
+                data.get("base_url") or provider.base_url, data.get("kind") or provider.kind
+            )
+        except OutboundURLError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     api_key = data.pop("api_key", None)
     if api_key is not None:
         provider.api_key_enc = encrypt_secret(api_key) if api_key else None
     for field, value in data.items():
-        if field == "base_url" and value:
-            try:
-                value = validate_outbound_base_url(value, allow_http=provider.kind == "ollama")
-            except OutboundURLError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
         setattr(provider, field, value)
     await db.commit()
     await db.refresh(provider)

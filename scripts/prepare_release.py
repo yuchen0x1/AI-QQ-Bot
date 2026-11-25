@@ -24,6 +24,21 @@ def prepare(root: Path, tag: str) -> str:
     for source, actual in versions.items():
         if actual != version:
             raise ValueError(f"{source} version {actual!r} does not match {tag}")
+    dedicated = root / "docs/releases" / f"{tag}.md"
+    if dedicated.exists():
+        notes = dedicated.read_text(encoding="utf-8").strip()
+        lines = notes.splitlines()
+        if not lines or lines[0] != "## 📢 版本概述":
+            raise ValueError(f"Template notes for {tag} must start with '## 📢 版本概述'")
+        if any(re.match(r"^#\s", line) or re.match(
+            r"^#{2,6}\s+(?:QBot\s+AI\s+)?v?\d+\.\d+\.\d+(?:\s|$|（|\()", line, re.IGNORECASE
+        ) or line.strip("# *") == f"QBot AI {tag}" for line in lines):
+            raise ValueError(f"Template notes for {tag} must not repeat the release title or version heading")
+        if not any(line.startswith("- ") and line[2:].strip() for line in lines):
+            raise ValueError(f"Template notes for {tag} are empty")
+        if re.search(r"\[(?:项目名称|版本号|待填写|用户能感知的核心变化|功能名称|问题表现)\]", notes):
+            raise ValueError(f"Template notes for {tag} contain unfilled placeholders")
+        return notes + "\n"
     lines = (root / "docs/releases/release-notes.md").read_text(encoding="utf-8").splitlines()
     header = re.compile(rf"^## v?{re.escape(version)}(?:\s|（|\()")
     start = next((i for i, line in enumerate(lines) if header.match(line)), None)

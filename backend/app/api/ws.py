@@ -35,6 +35,7 @@ logger = logging.getLogger("qbot.ws")
 
 # WebSocket 票据的有效期（秒）。只够完成一次握手，不用于长期鉴权。
 WS_TICKET_TTL_SECONDS = 60
+WS_SESSION_RECHECK_SECONDS = 30.0
 
 
 def _raw_token(request: Request) -> str | None:
@@ -147,6 +148,44 @@ async def _session_alive(username: str, jti: str | None) -> bool:
         return not (expires_at and expires_at <= datetime.now(timezone.utc))
 
 
+async def _serve_stream(websocket, queue, username, session_jti, *, logs=False, account_id=None):
+    """Supervise authentication on its own clock, including under continuous traffic."""
+    async def watch_session():
+        while True:
+            await asyncio.sleep(WS_SESSION_RECHECK_SECONDS)
+            try:
+                alive = await _session_alive(username, session_jti)
+            except Exception:  # noqa: BLE001
+                logger.warning("WebSocket 会话复核失败，关闭连接 user=%s", username, exc_info=True)
+                alive = False
+            if not alive:
+                await websocket.close(code=4401, reason="登录会话已失效")
+                return
+
+    async def forward():
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=25)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping", "id": None,
+                                           "time": datetime.now(timezone.utc).isoformat(), "data": {}})
+                continue
+            data = item.get("data") or {}
+            if account_id is not None and data.get("account_id") not in {None, account_id}:
+                continue
+            await websocket.send_json({"type": "log", **item} if logs else item)
+
+    tasks = [asyncio.create_task(watch_session()), asyncio.create_task(forward())]
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task.result()
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @router.post("/ws/ticket")
 async def issue_ws_ticket(
     request: Request,
@@ -202,29 +241,9 @@ async def ws_events(
     await websocket.accept()
     queue = await event_hub.subscribe()
     session_jti, username = _session_ref(credential)
-    tick = 0
     try:
         await websocket.send_json({"type": "connected", "id": None, "time": datetime.now(timezone.utc).isoformat(), "data": {"channels": ["log.created", "account.state", "status"]}})
-        while True:
-            try:
-                item = await asyncio.wait_for(queue.get(), timeout=25)
-                data = item.get("data") or {}
-                if account_id is not None and data.get("account_id") not in {None, account_id}:
-                    continue
-                await websocket.send_json(item)
-            except asyncio.TimeoutError:
-                tick += 1
-                # 每 4 次心跳（约 100 秒）复核一次会话，撤销登录后必须尽快断开。
-                if tick % 4 == 0:
-                    try:
-                        alive = await _session_alive(username, session_jti)
-                    except Exception:  # noqa: BLE001
-                        logger.warning("ws/events 会话复核失败，保持连接 user=%s", username, exc_info=True)
-                        alive = True
-                    if not alive:
-                        await websocket.close(code=4401, reason="登录会话已失效")
-                        return
-                await websocket.send_json({"type": "ping", "id": None, "time": datetime.now(timezone.utc).isoformat(), "data": {}})
+        await _serve_stream(websocket, queue, username, session_jti, account_id=account_id)
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001
@@ -244,25 +263,9 @@ async def ws_logs(websocket: WebSocket, ticket: str | None = Query(default=None)
     await websocket.accept()
     queue = await hub.subscribe()
     session_jti, username = _session_ref(ticket or token)
-    tick = 0
     try:
         await websocket.send_json({"type": "connected", "message": "实时日志已连接"})
-        while True:
-            try:
-                item = await asyncio.wait_for(queue.get(), timeout=25)
-                await websocket.send_json({"type": "log", **item})
-            except asyncio.TimeoutError:
-                tick += 1
-                if tick % 4 == 0:
-                    try:
-                        alive = await _session_alive(username, session_jti)
-                    except Exception:  # noqa: BLE001
-                        logger.warning("ws/logs 会话复核失败，保持连接 user=%s", username, exc_info=True)
-                        alive = True
-                    if not alive:
-                        await websocket.close(code=4401, reason="登录会话已失效")
-                        return
-                await websocket.send_json({"type": "ping", "time": datetime.now(timezone.utc).isoformat()})
+        await _serve_stream(websocket, queue, username, session_jti, logs=True)
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001

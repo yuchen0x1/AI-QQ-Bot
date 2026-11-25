@@ -10,10 +10,10 @@
         <el-button :loading="loading" @click="load()">
           <AppIcon name="refresh" :size="14" class="btn-icon" />刷新配置
         </el-button>
-        <el-button @click="openPlayground">
+        <el-button v-if="can('ai:manage')" @click="openPlayground">
           <AppIcon name="sparkles" :size="14" class="btn-icon" />对话沙盒
         </el-button>
-        <el-button type="primary" @click="openProviderCreate">
+        <el-button v-if="can('ai:manage')" type="primary" @click="openProviderCreate">
           <AppIcon name="plus" :size="14" class="btn-icon" />添加供应商
         </el-button>
       </div>
@@ -81,7 +81,7 @@
           <AppIcon name="server" :size="28" />
           <b>还没有配置 AI 供应商</b>
           <span>先添加供应商并保存 API Key，再获取或手动添加可用模型。</span>
-          <el-button type="primary" size="small" @click="openProviderCreate">
+          <el-button v-if="can('ai:manage')" type="primary" size="small" @click="openProviderCreate">
             <AppIcon name="plus" :size="13" class="btn-icon" />添加第一个供应商
           </el-button>
         </div>
@@ -127,7 +127,7 @@
               <span class="model-count">
                 <AppIcon name="layers" :size="12" />{{ formatNumber(p.model_count) }} 个模型
               </span>
-              <div class="provider-actions">
+              <div v-if="can('ai:manage')" class="provider-actions">
                 <el-button link type="primary" :loading="syncing === p.id" @click="syncProvider(p)">
                   <AppIcon name="download" :size="12" class="btn-icon" />获取模型
                 </el-button>
@@ -154,7 +154,7 @@
           </div>
           <div class="surface-actions">
             <span class="section-count">{{ enabledModels.length }} 个启用</span>
-            <el-button type="primary" plain @click="openModel">
+            <el-button v-if="can('ai:manage')" type="primary" plain @click="openModel">
               <AppIcon name="plus" :size="13" class="btn-icon" />添加模型
             </el-button>
           </div>
@@ -226,12 +226,14 @@
             <el-table-column label="优先级" width="76" align="right">
               <template #default="{ row }"><span class="numeric">{{ row.priority }}</span></template>
             </el-table-column>
-            <el-table-column label="操作" width="242" fixed="right">
+            <el-table-column v-if="can('ai:manage')" label="操作" width="330" fixed="right">
               <template #default="{ row }">
                 <div class="row-actions">
                   <el-button link type="primary" @click="testModel(row)">对话</el-button>
                   <el-button link type="success" :loading="modelTestingId === row.id" @click="checkModel(row)">测试</el-button>
                   <el-button link type="warning" :disabled="row.is_default" @click="setDefault(row)">设默认</el-button>
+                  <el-button link type="primary" :aria-label="`编辑模型 ${modelLabel(row)}`" @click="openEditModel(row)">编辑</el-button>
+                  <el-button link :type="row.enabled ? 'warning' : 'success'" :loading="togglingModelId === row.id" @click="toggleModel(row)">{{ row.enabled ? '停用' : '启用' }}</el-button>
                   <el-button link type="danger" @click="removeModel(row)">删除</el-button>
                 </div>
               </template>
@@ -241,7 +243,7 @@
                 <AppIcon name="layers" :size="26" />
                 <b>还没有配置模型</b>
                 <span>添加模型后即可设置默认路由、测试连接或直接开始对话。</span>
-                <el-button size="small" type="primary" plain @click="openModel">添加模型</el-button>
+                <el-button v-if="can('ai:manage')" size="small" type="primary" plain @click="openModel">添加模型</el-button>
               </div>
             </template>
           </el-table>
@@ -342,6 +344,7 @@
         <el-form-item label="API Base URL" prop="base_url">
           <el-input v-model="providerForm.base_url" placeholder="https://api.example.com/v1" />
         </el-form-item>
+        <el-alert v-if="providerForm.kind === 'ollama'" type="info" :closable="false" title="本地地址须由服务器管理员在 OLLAMA_ALLOWED_BASE_URLS 中明确允许，例如 http://localhost:11434；未配置时私网地址默认拒绝。" />
         <el-form-item label="API Key" prop="api_key">
           <el-input
             v-model="providerForm.api_key"
@@ -373,21 +376,24 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="modelDialog" title="添加模型" width="min(600px, calc(100vw - 28px))" destroy-on-close>
+    <el-dialog v-model="modelDialog" :title="editingModelId ? '编辑模型' : '添加模型'" width="min(600px, calc(100vw - 28px))" destroy-on-close>
       <el-form ref="modelRef" :model="modelForm" :rules="modelRules" label-position="top" class="dialog-form">
         <el-form-item label="所属供应商" prop="provider_id">
-          <el-select v-model="modelForm.provider_id" style="width: 100%" placeholder="选择一个已启用的供应商">
-            <el-option v-for="p in providers.filter(x => x.enabled)" :key="p.id" :label="p.name" :value="p.id" />
+          <el-select v-model="modelForm.provider_id" :disabled="Boolean(editingModelId)" style="width: 100%" placeholder="选择一个已启用的供应商">
+            <el-option v-for="p in providers.filter(x => x.enabled || x.id === modelForm.provider_id)" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
         </el-form-item>
         <div class="form-cols">
           <el-form-item label="Model ID" prop="model_name">
-            <el-input v-model="modelForm.model_name" placeholder="例如：deepseek-chat / gpt-4o-mini" />
+            <el-input v-model="modelForm.model_name" :readonly="Boolean(editingModelId)" placeholder="例如：deepseek-chat / gpt-4o-mini" />
           </el-form-item>
           <el-form-item label="显示名称">
             <el-input v-model="modelForm.display_name" placeholder="可选，便于后台识别" />
           </el-form-item>
         </div>
+        <el-form-item label="失败重试次数">
+          <el-input-number v-model="modelForm.retries" :min="0" :max="5" />
+        </el-form-item>
         <div class="form-cols">
           <el-form-item label="温度">
             <el-input-number v-model="modelForm.temperature" :min="0" :max="2" :step="0.1" style="width: 100%" />
@@ -408,6 +414,7 @@
           <div class="checkbox-row">
             <el-checkbox v-model="modelForm.is_default">设为默认模型</el-checkbox>
             <el-checkbox v-model="modelForm.is_fallback">作为备用模型</el-checkbox>
+            <el-checkbox v-model="modelForm.allow_cross_provider_fallback">允许降级到其他供应商</el-checkbox>
             <el-checkbox v-model="modelForm.enabled">启用</el-checkbox>
           </div>
         </el-form-item>
@@ -590,6 +597,9 @@ import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppIcon from '../components/AppIcon.vue'
 import { AI_TIMEOUT, api } from '../api'
+import { usePermissions } from '../composables/usePermissions'
+
+const { can } = usePermissions()
 
 interface ProviderRow {
   id: number
@@ -614,6 +624,11 @@ interface ModelRow {
   is_default: boolean
   is_fallback: boolean
   priority: number
+  temperature: number
+  max_tokens: number
+  timeout_seconds: number
+  retries: number
+  allow_cross_provider_fallback?: boolean
   total_calls?: number
   total_errors?: number
   total_tokens?: number
@@ -648,6 +663,8 @@ const saving = ref(false)
 const providerDialog = ref(false)
 const modelDialog = ref(false)
 const editingProvider = ref(false)
+const editingModelId = ref<number | null>(null)
+const togglingModelId = ref<number | null>(null)
 const providerRef = ref<any>()
 const modelRef = ref<any>()
 const providerRow = ref<ProviderRow | null>(null)
@@ -707,6 +724,7 @@ const modelForm = reactive<any>({
   priority: 100,
   is_default: false,
   is_fallback: false,
+  allow_cross_provider_fallback: false,
   enabled: true,
 })
 
@@ -982,6 +1000,8 @@ async function removeProvider(provider: ProviderRow) {
 }
 
 function openModel() {
+  if (!can('ai:manage')) return
+  editingModelId.value = null
   Object.assign(modelForm, {
     provider_id: providers.value.find(provider => provider.enabled)?.id || null,
     model_name: '',
@@ -993,17 +1013,45 @@ function openModel() {
     priority: 100,
     is_default: false,
     is_fallback: false,
+    allow_cross_provider_fallback: false,
     enabled: true,
   })
   modelDialog.value = true
 }
 
+function openEditModel(model: ModelRow) {
+  if (!can('ai:manage')) return
+  editingModelId.value = model.id
+  Object.assign(modelForm, {
+    provider_id: model.provider_id, model_name: model.model_name, display_name: model.display_name || '',
+    temperature: model.temperature, max_tokens: model.max_tokens, timeout_seconds: model.timeout_seconds,
+    retries: model.retries, priority: model.priority, is_default: model.is_default,
+    is_fallback: model.is_fallback, allow_cross_provider_fallback: model.allow_cross_provider_fallback === true,
+    enabled: model.enabled,
+  })
+  modelDialog.value = true
+}
+
+async function toggleModel(model: ModelRow) {
+  if (!can('ai:manage') || togglingModelId.value) return
+  togglingModelId.value = model.id
+  try {
+    const { data } = await api.put(`/ai/models/${model.id}`, { enabled: !model.enabled })
+    Object.assign(model, data)
+    ElMessage.success(model.enabled ? '模型已启用' : '模型已停用')
+  } finally { togglingModelId.value = null }
+}
+
 async function saveModel() {
+  if (!can('ai:manage')) return
   await modelRef.value?.validate(async (valid: boolean) => {
     if (!valid) return
     saving.value = true
     try {
-      await api.post('/ai/models', modelForm)
+      if (editingModelId.value) {
+        const { provider_id, model_name, ...payload } = modelForm
+        await api.put(`/ai/models/${editingModelId.value}`, payload)
+      } else await api.post('/ai/models', modelForm)
       ElMessage.success('模型已保存')
       modelDialog.value = false
       await load()

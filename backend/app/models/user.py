@@ -99,3 +99,19 @@ class WsTicket(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class GithubOAuthState(Base):
+    """Single-use OAuth initiation bound to one authenticated browser session."""
+
+    __tablename__ = "github_oauth_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    state_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    browser_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    auth_session_id: Mapped[int] = mapped_column(ForeignKey("auth_sessions.id", ondelete="CASCADE"), nullable=False)
+    code_verifier_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

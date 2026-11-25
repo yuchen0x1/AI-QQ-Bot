@@ -53,6 +53,7 @@ class ModelCreate(BaseModel):
     priority: int = Field(default=100, ge=1, le=999)
     is_default: bool = False
     is_fallback: bool = False
+    allow_cross_provider_fallback: bool = False
     enabled: bool = True
 
 
@@ -62,9 +63,10 @@ class ModelUpdate(BaseModel):
     max_tokens: int | None = Field(default=None, ge=16, le=200000)
     timeout_seconds: int | None = Field(default=None, ge=5, le=600)
     retries: int | None = Field(default=None, ge=0, le=5)
-    priority: int | None = None
+    priority: int | None = Field(default=None, ge=1, le=999)
     is_default: bool | None = None
     is_fallback: bool | None = None
+    allow_cross_provider_fallback: bool | None = None
     enabled: bool | None = None
 
 
@@ -80,6 +82,7 @@ class ModelOut(ORMModel):
     priority: int
     is_default: bool
     is_fallback: bool
+    allow_cross_provider_fallback: bool
     enabled: bool
     total_calls: int
     total_errors: int
