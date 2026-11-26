@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import AdapterError, AdapterEvent, QQAdapter, UnsupportedAction
 from app.models import Account, BotCommand, Group, GroupMember, GroupSettings, GithubRepository
+from app.services.bot_reply import BotReply
 
 logger = logging.getLogger("qbot.commands")
 
@@ -36,7 +37,17 @@ class CommandContext:
     args: list[str] = field(default_factory=list)
     at_targets: list[int] = field(default_factory=list)
     command_name: str = ""
+    raw_args: str = ""
+    features: dict[str, Any] = field(default_factory=dict)
     started: float = field(default_factory=time.perf_counter)
+
+    @property
+    def prefix(self) -> str:
+        return (self.settings.command_prefix if self.settings else "/") or "/"
+
+    @property
+    def api_session_key(self) -> tuple[int, int, int]:
+        return (self.account_id, self.group_number or 0, self.sender_id)
 
     @property
     def rank(self) -> int:
@@ -62,7 +73,7 @@ class CommandContext:
         return default
 
 
-CommandHandler = Callable[[CommandContext], Awaitable[str]]
+CommandHandler = Callable[[CommandContext], Awaitable[str | BotReply]]
 
 
 class CommandRegistry:
@@ -96,7 +107,11 @@ def command(name: str, aliases: list[str] | None = None) -> Callable[[CommandHan
 
 
 BUILTIN_COMMANDS: list[dict[str, Any]] = [
-    {"name": "help", "aliases": ["帮助", "菜单"], "description": "查看可用命令", "handler": "help", "min_role": "member"},
+    {"name": "help", "aliases": ["帮助"], "description": "查看可用命令", "handler": "help", "min_role": "member"},
+    {"name": "menu", "aliases": ["菜单", "功能菜单"], "description": "查看素颜 API 分页功能菜单", "handler": "menu", "min_role": "member", "usage": "/菜单 [页码]"},
+    {"name": "api", "aliases": ["接口", "API"], "description": "选择并调用菜单中的 API", "handler": "api", "min_role": "member", "usage": "/接口 编号或ID [参数名=值]"},
+    {"name": "api_search", "aliases": ["搜索接口"], "description": "按关键词查找 API", "handler": "api_search", "min_role": "member", "usage": "/搜索接口 关键词"},
+    {"name": "api_cancel", "aliases": ["取消接口"], "description": "取消当前 API 参数填写", "handler": "api_cancel", "min_role": "member"},
     {"name": "status", "aliases": ["状态"], "description": "查看机器人运行状态", "handler": "status", "min_role": "member"},
     {"name": "ping", "aliases": [], "description": "测试响应延迟", "handler": "ping", "min_role": "member"},
     {"name": "ai", "aliases": ["问"], "description": "向 AI 提问", "handler": "ai", "min_role": "member", "usage": "/ai 你的问题"},
@@ -161,7 +176,7 @@ async def _require_capability(ctx: CommandContext, action: str) -> None:
 # ---------------------------------------------------------------------------
 # 处理器
 # ---------------------------------------------------------------------------
-@command("help", ["帮助", "菜单"])
+@command("help", ["帮助"])
 async def cmd_help(ctx: CommandContext) -> str:
     rows = await ctx.db.scalars(select(BotCommand).where(BotCommand.enabled.is_(True)).order_by(BotCommand.id))
     lines = ["可用命令："]
@@ -171,6 +186,73 @@ async def cmd_help(ctx: CommandContext) -> str:
         usage = item.usage or f"/{item.name}"
         lines.append(f"· {usage} — {item.description or ''}")
     return "\n".join(lines)
+
+
+def _require_api_menu(ctx: CommandContext) -> None:
+    if not ctx.features.get("official_api_menu_enabled", True):
+        raise PermissionError("该账号已关闭 API 菜单，管理员可在账号设置中开启")
+
+
+def _split_command(body: str) -> tuple[str, str]:
+    """Split a command and accept compact Chinese page commands such as 菜单2."""
+    parts = body.split(maxsplit=1)
+    token = parts[0] if parts else ""
+    rest = parts[1] if len(parts) > 1 else ""
+    for alias in ("菜单", "功能菜单", "menu"):
+        if not token.startswith(alias):
+            continue
+        suffix = token[len(alias):]
+        if suffix.isdecimal():
+            token = alias
+            rest = f"{suffix} {rest}".strip()
+            break
+    return token, rest
+
+
+@command("menu", ["菜单", "功能菜单"])
+async def cmd_menu(ctx: CommandContext) -> BotReply:
+    from app.services.suyan import suyan_service
+
+    _require_api_menu(ctx)
+    suyan_service.cancel_session(ctx.api_session_key)
+    argument = ctx.raw_args.strip()
+    if not argument:
+        return suyan_service.build_menu(prefix=ctx.prefix)
+    page_or_query, query = argument.split(maxsplit=1) if " " in argument else (argument, "")
+    if page_or_query.isdecimal():
+        return suyan_service.build_menu(page=page_or_query, query=query, prefix=ctx.prefix)
+    return suyan_service.build_menu(query=argument, prefix=ctx.prefix)
+
+
+@command("api", ["接口", "API"])
+async def cmd_api(ctx: CommandContext) -> BotReply:
+    from app.services.suyan import suyan_service
+
+    _require_api_menu(ctx)
+    parts = ctx.raw_args.strip().split(maxsplit=1)
+    key = parts[0] if parts else ""
+    arguments = parts[1] if len(parts) > 1 else ""
+    if not key:
+        return BotReply(f"用法：{ctx.prefix}接口 编号或ID 参数名=值\n发送「菜单」查看功能；需要填写的参数会逐项提示。")
+    return await suyan_service.execute(key, arguments, ctx.api_session_key, prefix=ctx.prefix)
+
+
+@command("api_search", ["搜索接口"])
+async def cmd_api_search(ctx: CommandContext) -> BotReply:
+    from app.services.suyan import suyan_service
+
+    _require_api_menu(ctx)
+    suyan_service.cancel_session(ctx.api_session_key)
+    if not ctx.raw_args.strip():
+        return BotReply(f"用法：{ctx.prefix}搜索接口 天气")
+    return suyan_service.build_menu(query=ctx.raw_args.strip(), prefix=ctx.prefix)
+
+
+@command("api_cancel", ["取消接口"])
+async def cmd_api_cancel(ctx: CommandContext) -> BotReply:
+    from app.services.suyan import suyan_service
+
+    return suyan_service.cancel_session(ctx.api_session_key)
 
 
 @command("status", ["状态"])
@@ -361,6 +443,47 @@ async def seed_commands(db: AsyncSession) -> int:
     return created
 
 
+def is_api_request(account_id: int, event: AdapterEvent, settings: GroupSettings | None, text: str) -> bool:
+    from app.services.suyan import suyan_service
+
+    prefix = (settings.command_prefix if settings else "/") or "/"
+    body = text.strip()
+    if body.startswith(prefix):
+        body = body[len(prefix):].strip()
+    if not body:
+        return False
+    parts = body.split(maxsplit=1)
+    resolved = registry.resolve(parts[0]) if parts else None
+    if resolved:
+        return resolved[0] == "api"
+    return suyan_service.has_session((account_id, event.group_id or 0, int(event.user_id or 0)))
+
+
+async def _continue_api_session(
+    db: AsyncSession,
+    *,
+    account: Account,
+    event: AdapterEvent,
+    settings: GroupSettings | None,
+    text: str,
+    prefix: str,
+) -> BotReply | str | None:
+    from app.services.suyan import suyan_service
+
+    key = (account.id, event.group_id or 0, int(event.user_id or 0))
+    if not suyan_service.has_session(key):
+        return None
+    if not (account.features or {}).get("official_api_menu_enabled", True):
+        suyan_service.cancel_session(key)
+        return "该账号已关闭 API 菜单，当前参数填写已取消。"
+    record = await db.scalar(select(BotCommand).where(BotCommand.name == "api"))
+    role = await resolve_role(db, account.id, event, int(event.user_id or 0))
+    if record and (not record.enabled or ROLE_RANK.get(role, 0) < ROLE_RANK.get(record.min_role, 0)):
+        suyan_service.cancel_session(key)
+        return "接口命令已被禁用或权限发生变化，当前参数填写已取消。"
+    return await suyan_service.continue_session(text.strip(), key, prefix=prefix)
+
+
 async def dispatch(
     db: AsyncSession,
     *,
@@ -370,18 +493,20 @@ async def dispatch(
     settings: GroupSettings | None,
     group: Group | None,
     text: str,
-) -> str | None:
-    """解析并执行命令。返回要发送的文本（None 表示不处理）。"""
+) -> str | BotReply | None:
+    """解析并执行命令。None 表示未处理，空字符串仅用于显式 AI。"""
     prefix = (settings.command_prefix if settings else "/") or "/"
     body = text.strip()
     if body.startswith(prefix):
         body = body[len(prefix) :].strip()
     if not body:
         return None
-    token, _, rest = body.partition(" ")
+    token, rest = _split_command(body)
     resolved = registry.resolve(token)
     if not resolved:
-        return None
+        return await _continue_api_session(
+            db, account=account, event=event, settings=settings, text=text, prefix=prefix
+        )
     name, handler = resolved
     record = await db.scalar(select(BotCommand).where(BotCommand.name == name))
     if record and not record.enabled:
@@ -411,6 +536,8 @@ async def dispatch(
         args=[a for a in rest.split(" ") if a.strip()],
         at_targets=ats,
         command_name=name,
+        raw_args=rest,
+        features=account.features or {},
     )
     try:
         result = await handler(ctx)
@@ -432,7 +559,7 @@ async def dispatch(
             category="command",
             message=f"命令 /{name} 由 {sender_id}（{role}）在群 {event.group_id or '私聊'} 触发",
             account_id=account.id,
-            context={"command": name, "args": rest, "role": role},
+            context={"command": name, "args": "[API 参数已隐藏]" if name == "api" else rest, "role": role},
         )
     # 空字符串是有意义的返回值：表示「命令已接管，但回复交给 AI 生成」。
     # 这里不能用 `result or None`，否则空串会被吞成 None，/ai 永远不会触发回复。

@@ -37,6 +37,10 @@ OFFICIAL_FEATURE_KEYS = (
     "official_intents",
     "official_allow_proactive",
     "official_api_base",
+    "official_api_menu_enabled",
+    "official_menu_markdown_mode",
+    "official_menu_template_id",
+    "official_menu_template_key",
 )
 OFFICIAL_MODES = ("official_ws", "official_webhook")
 OFFICIAL_FEATURE_DEFAULTS = {
@@ -44,6 +48,10 @@ OFFICIAL_FEATURE_DEFAULTS = {
     "official_intents": DEFAULT_OFFICIAL_INTENTS,
     "official_allow_proactive": True,
     "official_api_base": "",
+    "official_api_menu_enabled": True,
+    "official_menu_markdown_mode": "plain",
+    "official_menu_template_id": "",
+    "official_menu_template_key": "content",
 }
 
 
@@ -82,6 +90,10 @@ def serialize(account: Account, groups: int = 0) -> AccountOut:
         official_intents=int(official["official_intents"]),
         official_allow_proactive=bool(official["official_allow_proactive"]),
         official_api_base=official["official_api_base"] or None,
+        official_api_menu_enabled=bool(official["official_api_menu_enabled"]),
+        official_menu_markdown_mode=official["official_menu_markdown_mode"],
+        official_menu_template_id=official["official_menu_template_id"],
+        official_menu_template_key=official["official_menu_template_key"],
         enabled=account.enabled,
         auto_start=account.auto_start,
         auto_reconnect=account.auto_reconnect,
@@ -158,6 +170,10 @@ async def create_account(
         "official_intents": int(payload.official_intents),
         "official_allow_proactive": bool(payload.official_allow_proactive),
         "official_api_base": payload.official_api_base or "",
+        "official_api_menu_enabled": payload.official_api_menu_enabled,
+        "official_menu_markdown_mode": payload.official_menu_markdown_mode,
+        "official_menu_template_id": payload.official_menu_template_id,
+        "official_menu_template_key": payload.official_menu_template_key,
     }
     if official_config["official_api_base"]:
         try:
@@ -226,11 +242,23 @@ async def update_account(
         raise HTTPException(status_code=400, detail="QQ 官方机器人必须填写 AppID 和 AppSecret")
     if next_mode not in OFFICIAL_MODES:
         data["connection_mode"] = "official_ws"
+    incoming_features = {key: data.pop(key) for key in OFFICIAL_FEATURE_KEYS if key in data}
+    if incoming_features:
+        current_features = account.features or {}
+        next_menu_mode = incoming_features.get(
+            "official_menu_markdown_mode",
+            current_features.get("official_menu_markdown_mode", OFFICIAL_FEATURE_DEFAULTS["official_menu_markdown_mode"]),
+        )
+        next_template_id = incoming_features.get(
+            "official_menu_template_id",
+            current_features.get("official_menu_template_id", OFFICIAL_FEATURE_DEFAULTS["official_menu_template_id"]),
+        )
+        if next_menu_mode == "template" and not next_template_id:
+            raise HTTPException(status_code=422, detail="模板 Markdown 模式必须填写菜单模板 ID")
     # 空密钥保留原值，避免编辑时清空有效凭据。
     secret = data.pop("app_secret", None)
     if secret:
         account.app_secret_enc = encrypt_secret(secret)
-    incoming_features = {key: data.pop(key) for key in OFFICIAL_FEATURE_KEYS if key in data}
     if incoming_features:
         api_base = incoming_features.get("official_api_base")
         if api_base:

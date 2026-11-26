@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.services import commands as command_service
 from app.services.ai import service as ai_service
+from app.services.bot_reply import BotReply
 from app.services.logs import write_log
 from app.services.moderation import moderation, record_warning
 from app.services.templates import render_template, truncate
@@ -72,8 +73,22 @@ class BotEngine:
         self._ai_runners: dict[int, asyncio.Task] = {}
         self._ai_account_tasks: dict[int, set[asyncio.Task]] = {}
         self._ai_wake: dict[int, asyncio.Event] = {}
+        self._api_tasks: dict[tuple[int, int, int], asyncio.Task[None]] = {}
+        self._api_events: dict[asyncio.Task, tuple[QQAdapter, AdapterEvent]] = {}
 
     async def cancel_account(self, account_db_id: int) -> None:
+        from app.services.suyan import suyan_service
+
+        suyan_service.clear_account(account_db_id)
+        api_tasks = [task for key, task in self._api_tasks.items() if key[0] == account_db_id]
+        api_events = [self._api_events[task] for task in api_tasks if task in self._api_events]
+        for task in api_tasks:
+            task.cancel()
+        if api_tasks:
+            await asyncio.gather(*api_tasks, return_exceptions=True)
+        for adapter, event in api_events:
+            if not event.raw.get("_api_started"):
+                await self._finish_inbox(adapter, event, error="API processing cancelled before start")
         pending = self._ai_pending.pop(account_db_id, {})
         self._ai_order.pop(account_db_id, None)
         self._ai_wake.pop(account_db_id, None)
@@ -297,6 +312,59 @@ class BotEngine:
         finally:
             await self._finish_inbox(adapter, event, error=error)
 
+    def schedule_api_reply(self, account_id: int, adapter: QQAdapter, event: AdapterEvent, text: str) -> bool:
+        key = (account_id, event.group_id or 0, int(event.user_id or 0))
+        active = {item: task for item, task in self._api_tasks.items() if not task.done()}
+        if key in active or len(active) >= 16 or sum(item[0] == account_id for item in active) >= 4:
+            return False
+        event.raw["_inbox_deferred"] = True
+        task = asyncio.create_task(self._api_reply_task(account_id, adapter, event, text), name=f"qbot-api-{account_id}")
+        self._api_tasks[key] = task
+        self._api_events[task] = (adapter, event)
+
+        def finished(completed: asyncio.Task) -> None:
+            self._api_events.pop(completed, None)
+            if self._api_tasks.get(key) is completed:
+                self._api_tasks.pop(key, None)
+
+        task.add_done_callback(finished)
+        return True
+
+    async def _api_reply_task(self, account_id: int, adapter: QQAdapter, event: AdapterEvent, text: str) -> None:
+        from app.services.account_manager import account_manager
+
+        event.raw["_api_started"] = True
+        error: str | None = None
+        try:
+            async with asyncio.timeout(30):
+                async with SessionLocal() as db:
+                    account = await db.get(Account, account_id)
+                    underlying = getattr(adapter, "adapter", adapter)
+                    if not account or not account.enabled or account_manager.adapter(account_id) is not underlying:
+                        return
+                    group = None
+                    group_settings = None
+                    if event.group_id:
+                        group = await db.scalar(select(Group).where(
+                            Group.account_id == account_id, Group.group_number == event.group_id,
+                        ))
+                        if group:
+                            group_settings = await db.scalar(select(GroupSettings).where(GroupSettings.group_id == group.id))
+                    reply = await command_service.dispatch(
+                        db, account=account, adapter=adapter, event=event,
+                        settings=group_settings, group=group, text=text,
+                    )
+                    if reply:
+                        await self.send_reply(db, account, adapter, reply, group_number=event.group_id, user_id=event.user_id)
+        except asyncio.CancelledError:
+            error = "API processing cancelled"
+            raise
+        except Exception as exc:  # noqa: BLE001 - 后台请求必须释放 inbox 处理租约
+            error = f"API processing failed: {type(exc).__name__}"
+            logger.warning("API 后台回复失败 account=%s: %s", account_id, type(exc).__name__, exc_info=True)
+        finally:
+            await self._finish_inbox(adapter, event, error=error)
+
     # ------------------------------------------------------------------
     async def handle_event(self, db: AsyncSession, account_db_id: int, adapter: QQAdapter, event: AdapterEvent) -> None:
         account = await db.get(Account, account_db_id)
@@ -466,8 +534,17 @@ class BotEngine:
                 if verdict.action in {"mute", "kick"}:
                     return
 
-        # 2) 命令
-        command_reply: str | None = None
+        # 2) 外部 API 有独立上限，慢请求不阻塞同账号的菜单和其他群消息。
+        if text and command_service.is_api_request(account.id, event, settings, text):
+            if not self.schedule_api_reply(account.id, adapter, event, text):
+                await self.send_text(
+                    db, account, adapter, "接口正在处理或请求较多，请稍后再试。",
+                    group_number=event.group_id, user_id=event.user_id,
+                )
+            return
+
+        # 3) 命令
+        command_reply: str | BotReply | None = None
         handled_by_ai = False
         if text:
             command_reply = await command_service.dispatch(
@@ -477,7 +554,7 @@ class BotEngine:
                 handled_by_ai = True
                 command_reply = None
         if command_reply:
-            await self.send_text(db, account, adapter, command_reply, group_number=event.group_id, user_id=event.user_id)
+            await self.send_reply(db, account, adapter, command_reply, group_number=event.group_id, user_id=event.user_id)
             return
 
         # Explicit /ai wins; plugin commands and hooks run before implicit AI.
@@ -732,6 +809,52 @@ class BotEngine:
             await self._upsert_member(db, group, event, count_message=False)
 
     # ------------------------------------------------------------------
+    async def send_reply(
+        self,
+        db: AsyncSession,
+        account: Account,
+        adapter: QQAdapter,
+        reply: str | BotReply,
+        *,
+        group_number: int | None = None,
+        user_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        from app.adapters.qq_official import QQOfficialApiError
+
+        if isinstance(reply, str):
+            return await self.send_text(db, account, adapter, reply, group_number=group_number, user_id=user_id)
+        features = account.features or {}
+        markdown, keyboard = reply.markdown, reply.keyboard
+        mode = features.get("official_menu_markdown_mode", "plain")
+        if mode == "plain":
+            markdown, keyboard = None, None
+        elif mode == "template" and markdown:
+            template_id = str(features.get("official_menu_template_id") or "").strip()
+            if template_id:
+                markdown = {
+                    "custom_template_id": template_id,
+                    "params": [{
+                        "key": features.get("official_menu_template_key") or "content",
+                        "values": [str(markdown.get("content") or reply.text)[:4000]],
+                    }],
+                }
+            else:
+                markdown, keyboard = None, None
+        if not markdown:
+            return await self.send_text(db, account, adapter, reply.text, group_number=group_number, user_id=user_id)
+        try:
+            return await self.send_text(
+                db, account, adapter, reply.text, group_number=group_number, user_id=user_id,
+                markdown=markdown, keyboard=keyboard,
+            )
+        except (QQOfficialApiError, UnsupportedAction) as exc:
+            # 仅平台明确拒绝卡片时降级；网络超时的投递结果未知，不重复发送。
+            await write_log(
+                db, level="WARNING", category="qq", account_id=account.id,
+                message=f"API 菜单卡片被平台拒绝，已改发纯文本：{exc}",
+            )
+            return await self.send_text(db, account, adapter, reply.text, group_number=group_number, user_id=user_id)
+
     async def send_text(
         self,
         db: AsyncSession,
@@ -741,6 +864,8 @@ class BotEngine:
         *,
         group_number: int | None = None,
         user_id: int | None = None,
+        markdown: dict[str, Any] | None = None,
+        keyboard: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         if not text:
             return None
@@ -750,16 +875,17 @@ class BotEngine:
         if account_manager.adapter(account.id) is not underlying:
             raise AdapterError("账号连接已停止或已更换，取消旧连接的发送")
         payload = truncate(text, MAX_REPLY_CHARS)
+        card = {"markdown": markdown, "keyboard": keyboard} if markdown else {}
         try:
             if group_number:
                 if not adapter.supports("send_group_message"):
                     raise UnsupportedAction("当前协议端不支持发送群消息")
-                result = await adapter.send_group_message(group_number, payload)
+                result = await adapter.send_group_message(group_number, payload, **card)
                 direction_type = "group"
             elif user_id:
                 if not adapter.supports("send_private_message"):
                     raise UnsupportedAction("当前协议端不支持发送私聊消息")
-                result = await adapter.send_private_message(user_id, payload)
+                result = await adapter.send_private_message(user_id, payload, **card)
                 direction_type = "private"
             else:
                 return None
