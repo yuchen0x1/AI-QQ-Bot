@@ -32,7 +32,7 @@ DEFAULT_OUTPUT = (
     pathlib.Path(__file__).resolve().parents[1]
     / "backend"
     / "app"
-    / "data"
+    / "catalog"
     / "suyan_apis.json"
 )
 MAX_HOMEPAGE_BYTES = 2 * 1024 * 1024
@@ -1107,7 +1107,7 @@ def main(argv: list[str] | None = None) -> int:
         "--output",
         type=pathlib.Path,
         default=DEFAULT_OUTPUT,
-        help="JSON output path (default: backend/app/data/suyan_apis.json)",
+        help="JSON output path (default: backend/app/catalog/suyan_apis.json)",
     )
     cache_group = parser.add_mutually_exclusive_group()
     cache_group.add_argument(

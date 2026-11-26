@@ -29,7 +29,7 @@ from app.core.ssrf import OutboundTarget, OutboundURLError, resolve_outbound_tar
 from app.services.bot_reply import BotReply
 
 API_ORIGIN = "https://api.suyanw.cn"
-CATALOG_PATH = Path(__file__).resolve().parents[1] / "data" / "suyan_apis.json"
+CATALOG_PATH = Path(__file__).resolve().parents[1] / "catalog" / "suyan_apis.json"
 PAGE_SIZE = 8
 SessionKey = tuple[int, int, int]
 _REVIEWED_APIS = {

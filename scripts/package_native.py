@@ -3,10 +3,14 @@
 import argparse
 import io
 import json
-from pathlib import Path
 import tarfile
+from pathlib import Path
 
 from prepare_release import prepare
+
+# Must mirror the runtime-data blacklist enforced by scripts/updater/daemon.py:
+# any path containing these names makes the daemon reject the bundle.
+FORBIDDEN_PARTS = {".env", "data", "backups", ".venv", "node_modules", "__pycache__"}
 
 
 def main():
@@ -40,6 +44,8 @@ def main():
                     continue
                 if file.is_symlink() or "__pycache__" in file.parts or file.suffix in {".pyc", ".db", ".log"}:
                     continue
+                if any(part in FORBIDDEN_PARTS for part in file.relative_to(root).parts):
+                    parser.error(f"refusing to ship runtime-data path in bundle: {file.relative_to(root).as_posix()}")
                 if file.name.startswith(".env") or not file.resolve().is_relative_to(root):
                     continue
                 archive.add(file, arcname=prefix + "/" + file.relative_to(root).as_posix(), recursive=False)

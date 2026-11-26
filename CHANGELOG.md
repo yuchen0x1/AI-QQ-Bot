@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 2026-11-26 · v1.7.1
+
+- 修复：v1.7.0 在线升级失败（「升级包混入运行数据」）——v1.7.0 新增的 `backend/app/data/suyan_apis.json` 触发升级守护进程的运行数据路径检查，导致原生升级包在展开校验阶段被拒、升级中止（原版本继续运行，无数据损坏）。
+- 修复方式：目录迁移为 `backend/app/catalog/suyan_apis.json`，`suyan.py` 加载路径与 `sync_suyan_catalog.py` 默认输出同步更新；守护进程安全检查不放宽。
+- 预防：`package_native.py` 打包时按守护进程同一份黑名单（`.env`、`data`、`backups`、`.venv`、`node_modules`、`__pycache__`）预校验全部待打包路径，命中即中止。
+- 验证：backend 全量 pytest 通过（499/4 跳过）、scripts 测试 76 通过；以真实打包产物调用守护进程 `unpack()` 校验通过。无数据库迁移。
+
 ## 2026-11-26 · v1.7.0
 
 - 菜单：QQ 官方机器人群内 API 菜单上线，「菜单」「接口」「搜索接口」「取消接口」四个命令，支持紧凑「菜单2」翻页；目录来自经安全审核的静态 catalog（299 项），仅文档条目不执行调用。
