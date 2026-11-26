@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.common import ORMModel
 
@@ -27,6 +27,12 @@ class AccountBase(BaseModel):
     official_intents: int = Field(default=DEFAULT_OFFICIAL_INTENTS, ge=0, le=(1 << 31) - 1)
     official_allow_proactive: bool = True
     official_api_base: str | None = None
+    official_api_menu_enabled: bool = True
+    official_menu_markdown_mode: Literal["native", "template", "plain"] = "plain"
+    official_menu_template_id: str = Field(default="", max_length=128)
+    official_menu_template_key: str = Field(
+        default="content", min_length=1, max_length=64, pattern=r"^[a-zA-Z][a-zA-Z0-9_]*$"
+    )
     enabled: bool = True
     auto_start: bool = False
     auto_reconnect: bool = True
@@ -38,6 +44,17 @@ class AccountBase(BaseModel):
     @classmethod
     def _strip(cls, value: str | None) -> str | None:
         return value.strip() if value else value
+
+    @field_validator("official_menu_template_id", "official_menu_template_key", mode="before")
+    @classmethod
+    def _strip_menu_template_fields(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _require_template_id_for_template_mode(self) -> AccountBase:
+        if self.official_menu_markdown_mode == "template" and not self.official_menu_template_id:
+            raise ValueError("模板 Markdown 模式必须填写菜单模板 ID")
+        return self
 
 
 class AccountCreate(AccountBase):
@@ -56,12 +73,36 @@ class AccountUpdate(BaseModel):
     official_intents: int | None = Field(default=None, ge=0, le=(1 << 31) - 1)
     official_allow_proactive: bool | None = None
     official_api_base: str | None = None
+    official_api_menu_enabled: bool | None = None
+    official_menu_markdown_mode: Literal["native", "template", "plain"] | None = None
+    official_menu_template_id: str | None = Field(default=None, max_length=128)
+    official_menu_template_key: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^[a-zA-Z][a-zA-Z0-9_]*$"
+    )
     enabled: bool | None = None
     auto_start: bool | None = None
     auto_reconnect: bool | None = None
     reconnect_base_seconds: int | None = Field(default=None, ge=1, le=600)
     reconnect_max_seconds: int | None = Field(default=None, ge=5, le=3600)
     remark: str | None = None
+
+    @field_validator(
+        "official_api_menu_enabled",
+        "official_menu_markdown_mode",
+        "official_menu_template_id",
+        "official_menu_template_key",
+        mode="before",
+    )
+    @classmethod
+    def _menu_settings_cannot_be_null(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("菜单设置字段不能为 null")
+        return value
+
+    @field_validator("official_menu_template_id", "official_menu_template_key", mode="before")
+    @classmethod
+    def _strip_menu_template_fields(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
 
 
 class ConnectionOut(ORMModel):
@@ -93,6 +134,10 @@ class AccountOut(ORMModel):
     official_intents: int = DEFAULT_OFFICIAL_INTENTS
     official_allow_proactive: bool = True
     official_api_base: str | None = None
+    official_api_menu_enabled: bool = True
+    official_menu_markdown_mode: Literal["native", "template", "plain"] = "plain"
+    official_menu_template_id: str = ""
+    official_menu_template_key: str = "content"
     enabled: bool
     auto_start: bool
     auto_reconnect: bool

@@ -40,7 +40,7 @@
           <span class="account-note-icon"><AppIcon name="key" :size="15" /></span>
           <p>
             <b>官方机器人接入</b>
-            使用 QQ 开放平台的 AppID / AppSecret，无需扫码登录个人 QQ。Webhook 模式还需在平台完成回调地址验证。
+            使用 QQ 开放平台的 AppID / AppSecret，无需扫码登录个人 QQ。Webhook 模式还需在平台完成回调地址验证。群内使用菜单请 @ 机器人并发送“菜单”。默认使用纯文字分页，可发送“菜单 2”或“菜单2”翻页，搜索后可发送“菜单 2 关键词”；也可选择 Markdown 格式（需要开放平台授予 Markdown 和键盘权限）。
           </p>
         </div>
 
@@ -138,7 +138,13 @@ const officialModeOptions = [
   { value: 'official_ws', label: 'WebSocket（推荐，仅需出站连接）' },
   { value: 'official_webhook', label: 'Webhook（需公网 HTTPS 回调地址）' },
 ]
+const menuMarkdownModeOptions = [
+  { value: 'native', label: '原生 Markdown' },
+  { value: 'template', label: '模板 Markdown' },
+  { value: 'plain', label: '纯文本' },
+]
 const useWebhook = (field: any) => field.connection_mode === 'official_webhook'
+const useMenuTemplate = (field: any) => field.official_menu_markdown_mode === 'template'
 
 // QQ 官方机器人字段：AppID / AppSecret 来自 QQ 开放平台「开发设置」，不走扫码登录。
 const officialFields = (editing: boolean) => [
@@ -150,6 +156,10 @@ const officialFields = (editing: boolean) => [
   { key: 'official_allow_proactive', label: '允许主动消息', type: 'switch', default: true },
   { key: 'official_intents', label: '事件 Intents 位值（仅 WebSocket）', type: 'number', default: 33554432, min: 0, max: 2147483647, showWhen: (field: any) => !useWebhook(field) },
   { key: 'official_api_base', label: 'OpenAPI 域名（可选）', placeholder: '留空使用官方默认域名' },
+  { key: 'official_api_menu_enabled', label: 'API菜单', type: 'switch', default: true },
+  { key: 'official_menu_markdown_mode', label: '菜单消息格式', type: 'select', default: 'plain', options: menuMarkdownModeOptions },
+  { key: 'official_menu_template_id', label: '菜单模板ID', required: true, placeholder: '填写 QQ 开放平台提供的模板 ID', showWhen: useMenuTemplate },
+  { key: 'official_menu_template_key', label: '模板内容参数名', required: true, placeholder: 'content', showWhen: useMenuTemplate },
 ]
 const commonFields = () => [
   { key: 'qq_number', label: 'QQ 号码（可选备注）', type: 'number', placeholder: '官方机器人无需填写' },
