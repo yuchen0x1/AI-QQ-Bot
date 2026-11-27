@@ -15,5 +15,5 @@ bcrypt==4.2.1
 python-multipart==0.0.33
 email-validator==2.2.0
 cryptography==50.0.2
-psutil==6.1.1
+psutil==7.2.2
 websockets==17.4
