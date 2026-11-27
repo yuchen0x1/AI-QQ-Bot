@@ -30,7 +30,7 @@
     }
   },
   "devDependencies": {
-    "@vue/test-utils": "2.4.11",
+    "@vue/test-utils": "2.6.0",
     "jsdom": "^26.1.0",
     "typescript": "~5.7.2",
     "vite": "^6.0.7",
